@@ -1,0 +1,28 @@
+{
+  "default": {
+    "find_image_cmd": "gh-release find",
+    "register_image_cmd": "gh-release register",
+    "check_auth_cmd": "gh-repo-log --read --type=approved | tail -1",
+    "submit_auth_request_cmd": "gh-repo-auth-request",
+    "log_deployment_cmd": "gh-repo-log --write --type=deployed",
+
+    "prerelease_environments": [
+      "eval",
+      "staging"
+    ],
+    "production_environment": "production",
+    "autodeploy_autobuilt": [
+      "eval"
+    ]
+  },
+
+  "gwilliam-ucar-edu/test": {
+    "autodeploy_autobuilt": [
+      "eval",
+      "staging"
+    ],
+    "authorized_users": [
+      "gwilliam-ucar-edu"
+    ]
+  }
+}  

@@ -1,0 +1,112 @@
+version: 2.1
+executors:
+  generic-executor:
+    docker:
+      - image: circleci/php:7.2-cli
+    working_directory: ~/project
+    environment:
+      IMAGE_NAME: "gwilliam0ucar/test"
+      WORKSPACE: "/tmp/workspace"
+      LOCAL_BIN: "/tmp/workspace/bin"
+      STATEDIR: "/tmp/workspace/state"
+      INIT_RC: "/tmp/workspace/state/init.rc"
+      DIDACTIC_REPO: "git@github.com:NCAR/citools.git"
+
+jobs:
+
+  build-nondeployable:
+    executor: generic-executor
+    steps:
+      - setup_remote_docker
+
+      - run:
+          name: "Build"
+          command: |
+              echo docker build .
+
+  initialize-cd:
+    executor: generic-executor
+    steps:
+      - checkout
+
+      - run:
+          name: "Initialize workspace"
+          command: |
+              mkdir -p ${WORKSPACE}/bin ${WORKSPACE}/state
+              git clone -v --branch ${DIDACTIC_TAG:-master} --depth 1 ${DIDACTIC_REPO} ${WORKSPACE}
+              ${WORKSPACE}/bin/didactic-init
+
+      - persist_to_workspace:
+          root: /tmp/workspace
+          paths:
+            - bin
+            - state
+
+  build-deployable:
+    executor: generic-executor
+    steps:
+      - attach_workspace:
+          at: /tmp/workspace
+
+      - setup_remote_docker
+
+      - run:
+          name: "Conditionally build, push, and register image"
+          command: |
+              . ${INIT_RC}
+              didactic-cl build .
+
+      - persist_to_workspace:
+          root: /tmp/workspace
+          paths:
+            - state
+
+  deploy:
+    executor: generic-executor
+    steps:
+      - attach_workspace:
+          at: /tmp/workspace
+
+      - setup_remote_docker
+
+      - run:
+          name: "Pull image, tag and repush, log"
+          command: |
+              . ${INIT_RC}
+              didactic-cl deploy
+
+workflows:
+  version: 2
+  build:
+    jobs:
+      - build-nondeployable:
+          requires:
+            - initialize
+          filters:
+            branches:
+              only:
+                - master
+      - initialize-cd:
+          filters:
+            branches:
+              only: /.*/
+            tags:
+              only: /^\d+\.\d+\.\d+.*$/
+      - build-deployable:
+          requires:
+            - initialize-cd
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^\d+\.\d+\.\d+.*$/
+      - deploy:
+          requires:
+            - build-deployable
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^\d+\.\d+\.\d+.*/
+
+

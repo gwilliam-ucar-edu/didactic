@@ -1,0 +1,63 @@
+:
+#
+# Load the didactic coniguration for the current project.
+# The following variables must be defined:
+#  PROG
+#  STATEDIR
+#  REPO
+#  DIDACTIC_GLOBAL_CF
+#  DIDACTIC_CF
+#
+DIDACTIC_CF="${STATEDIR}/didactic.json"
+CF="${DIDACTIC_GLOBAL_CF}"
+
+# Verify complete configuration has entry for this project
+pconf=`jq ".\"${REPO}\"" <${CF}`
+if [ ":${pconf}" = ":" ] ; then
+    REPO_IS_DIDACTIC_TARGET=false
+    jq "." <${CF} >${DIDACTIC_CF} || exit 1
+    export DIDACTIC_CF REPO_IS_DIDACTIC_TARGET
+    circle-env --add DIDACTIC_CF REPO_IS_DIDACTIC_TARGET
+else
+    REPO_IS_DIDACTIC_TARGET=true
+    # Read complete, combine default and project configs into project config
+    jq ".imagereg + .log + .default + .\"${REPO}\"" <${CF} >${DIDACTIC_CF}
+    if [ $? != 0 ] ; then
+        echo "${PROG}: configuration error" >&2
+        exit 1
+    fi
+    REQ_VARS="
+      DEFAULT_DEPLOY_ENV \
+      DIDACTIC_CF \
+      DIDACTIC_FIND_IMAGE_CMD \
+      DIDACTIC_REGISTER_IMAGE_CMD \
+      DIDACTIC_CHECK_AUTH_CMD \
+      DIDACTIC_SUBMIT_AUTH_REQUEST_CMD \
+      DIDACTIC_LOG_DEPLOYMENT_CMD \
+      DIDACTIC_REPO \
+      PRODUCTION_ENVIRONMENT \
+      REPO_IS_DIDACTIC_TARGET
+    "
+    OPT_VARS="
+      PRERELEASE_ENVIRONMENTS
+      AUTODEPLOY_AUTOBUILT
+    "
+
+    DIDACTIC_FIND_IMAGE_CMD=`jq -r .find_image_cmd <${DIDACTIC_CF}`
+    DIDACTIC_REGISTER_IMAGE_CMD=`jq -r .register_image_cmd <${DIDACTIC_CF}`
+    DIDACTIC_CHECK_AUTH_CMD=`jq -r .check_auth_cmd <${DIDACTIC_CF}`
+    DIDACTIC_SUBMIT_AUTH_REQUEST_CMD=`jq -r .submit_auth_request_cmd <${DIDACTIC_CF}`
+    DIDACTIC_LOG_DEPLOYMENT_CMD=`jq -r .log_deployment_cmd <${DIDACTIC_CF}`
+    set : `jq -r '.prerelease_environments[]' ${DIDACTIC_CF}` ; shift
+    PRERELEASE_ENVIRONMENTS="$@"
+    PRODUCTION_ENVIRONMENT=`jq -r '.production_environment' ${DIDACTIC_CF}`
+    set "$@" "${PRODUCTION_ENVIRONMENT}"
+    DEFAULT_DEPLOY_ENV="$1"
+    set : `jq -r '.autodeploy_autobuilt[]' ${DIDACTIC_CF}` ; shift
+    AUTODEPLOY_AUTOBUILT="$@"
+
+    export ${REQ_VARS} ${OPT_VARS}
+    check-envvars --prog="${PROG}" ${REQ_VARS}
+
+    circle-env --add ${REQ_VARS} ${OPT_VARS}
+fi

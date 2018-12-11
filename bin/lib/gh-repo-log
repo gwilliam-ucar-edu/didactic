@@ -1,0 +1,167 @@
+#!/bin/sh
+PROG=gh-repo-log
+DESC="Read/write logs in the \"didactic management repo\""
+USAGE1="${PROG} --read [--project=<project>] [--deploy-env=<deploy_env>]
+                [--type=approved|deployed] [--image-tag=<image_tag>]"
+USAGE2="${PROG} --write [--project=<project>] --deploy-env=<deploy_env>
+                     --type=approved|deployed --image-tag=<image_tag>
+                     [<details>]"
+DIDACTIC_GH_REPO="https://github.com/gwilliam-ucar-edu/didactic-mgr.git"
+
+HELP_DESC="
+This script implements the \"authorization and deployment logging\"
+component of the didactic framework using a separate GitHub repo
+(\"didactic-mgr\"). Logs are simple text files with structured messages
+stored in the master branch of the repo.
+
+Every log message is associated with a project (target repo), an image tag,
+a type, and a deployment environment. The start of every log entry has a
+distinct format that allows the logs to be searched unambiguously.
+"
+HELP_OPTS="
+--read
+    Read a log. Selected log entries are written to standard output.
+
+--write
+    Write an entry to a log.
+
+--image-tag=<image_tag>
+    When writing, the image tag to include in the message (required). When
+    reading, only log entries with a matching image tag are shown
+    (optional). An image tag has the form
+        <semver_num>-<timestamp><semver_meta>, where <semver_num> is
+    the \"major.minor.patch\" part of the release tag, <timestamp> is the
+    UTC creation time of a specific image, and <semver_meta> is the metadata
+    portion of the release tag, with \"+\" replaced by \".\".
+
+--project=<project>
+    The project (GitHub repo) that is the subject of the log entry. If not
+    set, \${CIRCLE_PROJECT_REPONAME}/\${CIRCLE_PROJECT_REPONAME} is used.
+
+--type=approved|deployed
+    The approval type. This is required when writing. When reading, this
+    is optional, and indicates that only log entries with a matching type
+    are wanted.
+"
+HELP_ARGS="
+<details>
+    When writing, arbitrary text that will be appended to the log message.
+"
+HELP_ENV="
+CIRCLE_PROJECT_USERNAME
+    The git project username.
+
+CIRCLE_PROJECT_REPONAME
+    The git project reponame.
+
+DEPLOY_ENV
+    The deployment environment to use if the --deploy-env argument is not
+    provided.
+
+IMAGE_TAG
+    The image tag to use if the --image-tag argument is not provided.
+"
+SCRIPTDIR=`cd \`dirname $0\`; pwd`
+. ${SCRIPTDIR}/didactic.rc || exit 1
+
+check-envvars DIDACTIC_INIT
+if [ $? != 0 ] ; then
+    echo "${PROG}: didactic has not been initialized. Run \"didactic init\"" >&2
+    exit 1
+fi
+
+MODE=
+PROJECT="${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}"
+IMAGE_TAG=
+while expr ":$1" : ":--.*" >/dev/null ; do
+    arg="$1"
+    shift
+    case $arg in
+        --deploy-env=*)
+            DEPLOY_ENV=`expr "${arg}" : '--deploy-env=\(.*\)$'` ;;
+        --image-tag=*)
+            IMAGE_TAG=`expr "${arg}" : '--image-tag=\(.*\)$'` ;;
+        --project=*)
+            PROJECT=`expr "${arg}" : '--project=\(.*\)$'` ;;
+        --read)
+            MODE=read ;;
+        --type=approved)
+            TYPE=approved ;;
+        --type=deployed)
+            TYPE=deployed ;;
+        --type=*)
+            TYPE=`expr "${arg}" : '--type=\(.*\)$'`
+            echo "${PROG}: invalid type: ${TYPE}" >&2
+            exit 1 ;;
+        --write)
+            MODE=write ;;
+    esac
+done
+LOGDETAIL="$@"
+export TYPE PROJECT DEPLOY_ENV IMAGE_TAG
+if [ "${MODE}" = "write" ] ; then
+    check-envvars --prog="${PROG}" TYPE PROJECT DEPLOY_ENV IMAGE_TAG
+    valid_env=n
+    for env in $PRERELEASE_ENVIRONMENTS $PRODUCTiON_ENVIRONMENT ; do
+        if [ "${DEPLOY_ENV}" = "${env}" ] ; then
+            valid_env=y
+            break
+        fi
+    done
+if [ ${valid_env} = n ] ; then
+    echo "${PROG}: deploy env is not valid: $DEPLOY_ENV" >&2
+    exit 1
+fi
+else
+    check-envvars --prog="${PROG}" PROJECT
+fi
+
+# This sets DIDACTIC_LOG_DIR after cloning it if necessary
+. gh-repo-init.rc
+
+LOGRECORD_FORMAT='${PROJECT}:${IMAGE_TAG} ${TYPE_CLAUSE} ${DEPLOY_ENV}${LOGDETAIL}'
+APPROVED_CLAUSE="approved for deployment to"
+DEPLOYED_CLAUSE="deployed to"
+LOGFILE="${DIDACTIC_LOG_DIR}/logs/${PROJECT}.log"
+
+if [ "${MODE}" = "write" ] ; then
+    LOGDIR=`dirname ${LOGFILE}`
+    mkdir -p "${LOGDIR}" || exit 1
+    LOGMSG=`eval echo "\"${LOGRECORD_FORMAT}\""`
+    TSTAMP=`date "+%Y-%m-%dT%H:%M:%S%z"`
+    echo "${TSTAMP} ${LOGMSG}" >>${LOGFILE}
+
+    git add "${LOGFILE}" || exit 1
+    for try in 1 2 3 ; do
+        git commit -m "${LOGMSG}" && git push && exit 0
+        sleep 2
+        git pull
+    done
+    exit 1
+else
+    if [ ":${TYPE}" != ":" ] ; then
+        TYPE_CLAUSE="${TYPE}"
+    else
+        TYPE_CLAUSE="[a-z][ a-z]* to"
+    fi
+    if [ ":${IMAGE_TAG}" = ":" ] ; then
+        IMAGE_TAG="[.0-9]*-[.0-9]*Z[-.0-9a-zA-Z]*"
+    else
+        IMAGE_TAG=`echo "${IMAGE_TAG}" | sed -e 's/\./[.]/g'`
+    fi
+    if [ ":${DEPLOY_ENV}" = ":" ] ; then
+        DEPLOY_ENV="[^ ][^ ]*"
+    else
+        DEPLOY_ENV="${DEPLOY_ENV}"
+    if
+    LOG_DETAIL=".*"
+    eval PATTERN="\"${LOGRECORD_FORMAT}\""
+    vecho "PATTERN=${PATTERN}"
+    grep "^[^ ]*${PATTERN}" ${LOGFILE}
+fi
+exit 0
+
+
+
+
+

@@ -1,0 +1,84 @@
+:
+#
+# Handle basic common command-line arguments and initialization. See
+# script-template for sample usage.
+# 
+#
+case $1 in
+  -h|--help)
+    if [ ":${HELP_TEXT}" != ":" ] ; then
+        echo "${HELP_TEXT}"
+        exit 0
+    else
+        if [ ":${HELP_USAGE}" = ":" ] ; then
+            idx=1
+            while true ; do
+                var=USAGE${idx}
+                eval val=\"\$${var}\"
+                [ ":${val}" != ":" ] || break
+                HELP_USAGE="${HELP_USAGE}
+    ${val}"
+                idx=`expr ${idx} + 1`
+            done
+            HELP_USAGE="${HELP_USAGE}
+    ${PROG} -h|--help"
+        fi
+        if [ ":${USAGE}" = ":" ] ; then
+            USAGE="Usage:
+${HELP_USAGE}
+"
+            export USAGE
+        fi
+        cat <<EOF
+NAME
+    $PROG - $DESC
+
+SYNOPSIS$HELP_USAGE
+
+DESCRIPTION
+EOF
+        echo "${HELP_DESC}" | sed -e '/./,$!d' -e 's/^/    /'
+        echo "    The following arguments are currently supported:"
+        if [ ":${HELP_OPTS}" != ":" ] ; then
+            echo "${HELP_OPTS}" | sed -e 's/^/    /'
+        else
+            echo
+        fi
+        cat <<EOF
+    -h|--help
+        Print this help text and exit.
+
+EOF
+        if [ ":${HELP_ARGS}" != ":" ] ; then
+            echo "${HELP_ARGS}" | sed -e '/./,$!d' -e 's/^/    /'
+        fi
+        if [ ":${HELP_ENV}" != ":" ] ; then
+            echo "ENVIRONMENT"
+            echo "${HELP_ENV}" | sed -e '/./,$!d' -e 's/^/    /'
+        fi
+        if [ ":${HELP_FILES}" != ":" ] ; then
+            echo "FILES"
+            echo "${HELP_FILES}" | sed -e '/./,$!d' -e 's/^/    /'
+        fi
+        exit 0    
+    fi ;;
+esac
+if [ ":${SCRIPTDIR}" = ":" ] ; then
+    SCRIPTDIR=`cd \`dirname $0\`; pwd`
+fi
+if [ -f "${SCRIPTDIR}/didactic.rc" ] ; then
+    DIDACTIC_LIB="${SCRIPTDIR}"
+    SCRIPTDIR=`dirname ${SCRIPTDIR}`
+elif [ -f "${SCRIPTDIR}/lib/didactic.rc" ] ; then
+    DIDACTIC_LIB="${SCRIPTDIR}/lib"
+else
+    echo "${PROG}: improper installation: cannot locate didactic.rc" >&2
+    exit 1
+fi
+PATH="${SCRIPTDIR}:${DIDACTIC_LIB}:/usr/local/bin:/usr/local/sbin:/bin:/sbin:/usr/bin:/usr/sbin"
+export SCRIPTDIR DIDACTIC_LIB PATH
+if [ ":${CIRCLE_PROJECT_REPONAME}" = ":" ] ; then
+    echo "${PROG}: This must be run in a CircleCI job" >&2
+    exit 1
+fi
+

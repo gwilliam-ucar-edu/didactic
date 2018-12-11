@@ -1,0 +1,46 @@
+#!/bin/sh
+PROG=didactic-update
+DESC="Update the didactic-mgr repo and the didactic wiki"
+USAGE1="${PROG}"
+
+HELP_DESC="
+This script is meant to be run from a CircleCI build for the didactic repo.
+It reads the \"didactic.json\" configuration file and ensures that all
+projects named in the file are appropriate configured in the \"didactic-mgr\"
+repository. It also generates documentation for the \"didactic\" GitHub
+wiki using the latest versinos of all scripts.
+
+The CircleCI workspace must have been initialized; see \"didactic-init\".
+"
+HELP_ENV="
+DIDACTIC_CF
+    The didactic configuration file.
+"
+
+SCRIPTDIR=`cd \`dirname $0\`; pwd`
+. ${SCRIPTDIR}/lib/didactic.rc
+
+# Make sure $INIT_RC has been loaded and is properly initialized
+if [ ":${INIT_RC}" = ":" ] ; then
+    echo "${PROG}: INIT_RC must be set. Run \"didactic init\"." >&2
+    exit 1
+fi
+. ${INIT_RC} || exit 1
+if [ ":${DIDACTIC_INIT}" != ":true" ] ; then
+    echo "${PROG}: didactic has not been initialized. Run \"didactic init\"" >&2
+    exit 1
+fi
+
+#branch=`git branch | sed -n 's/^\* \(.*\)$/\1/p'` || exit 1
+branch=master
+if [ ":${branch}" != ":master" ] ; then
+    echo "${PROG}: Nothing to be done on branch ${branch}" >&2
+    exit 0
+fi
+
+PROJECTS=`jq -r 'keys[]' ${DIDACTIC_CF} | grep -v default`
+for project in ${PROJECTS} ; do
+
+done
+
+

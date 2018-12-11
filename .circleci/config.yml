@@ -1,0 +1,61 @@
+version: 2.1
+executors:
+  generic-executor:
+    docker:
+      - image: circleci/php:7.2-cli
+    working_directory: ~/project
+    environment:
+      WORKSPACE: "/tmp/workspace"
+      LOCAL_BIN: "/tmp/workspace/bin"
+      STATEDIR: "/tmp/workspace/state"
+      INIT_RC: "/tmp/workspace/state/init.rc"
+      DIDACTIC_REPO: "git@github.com:gwilliam-ucar-edu/didactic.git"
+
+jobs:
+
+  initialize:
+    executor: generic-executor
+    steps:
+      - checkout
+
+      - run:
+          name: "Initialize workspace"
+          command: |
+              mkdir -p ${WORKSPACE}/bin ${WORKSPACE}/state
+              git clone -v --branch ${DIDACTIC_TAG:-master} --depth 1 ${DIDACTIC_REPO} ${WORKSPACE}
+              ${WORKSPACE}/bin/didactic-init
+
+      - persist_to_workspace:
+          root: /tmp/workspace
+          paths:
+            - bin
+            - state
+
+  update:
+    executor: generic-executor
+    steps:
+      - attach_workspace:
+          at: /tmp/workspace
+
+      - run:
+          name: "Read configuration, update didactic-mgr, wiki"
+          command: |
+              . ${INIT_RC}
+              didactic-update
+
+workflows:
+  version: 2
+  build:
+    jobs:
+      - initialize:
+          filters:
+            branches:
+              only: master
+      - update:
+          requires:
+            - initialize
+          filters:
+            branches:
+              only: master
+
+

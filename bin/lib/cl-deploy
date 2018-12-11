@@ -1,0 +1,38 @@
+:
+# Run by "didactic-cl deploy"
+
+if [ ":${DEPLOY_ENV}" = ":" ] ; then
+    echo "${PROG}: No valid deployment environment" >&2
+    exit 1
+fi
+if [ ":${IMAGE_TAG}" = ":" ] ; then
+    echo "${PROG}: IMAGE_TAG is not defined - no image is registered" >&2
+    exit 1
+fi
+
+vecho "Checking for deployment authorization..."
+eval ${DIDACTIC_CHECK_AUTH_CMD}
+if [ $? != 0 ] ; then
+    vecho "Image ${IMAGE_TAG} not authorized for deployment to ${DEPLOY_ENV}" >&2
+    vecho "Submitting authorization request..." >&2
+    eval ${DIDACTIC_SUBMIT_AUTH_REQUEST_CMD}
+    exit 1
+fi
+
+set docker-tag-push
+if [ ":${DEPLOY_ENV}" = ":${PRODUCTION_ENVIRONMENT}" ] ; then
+    set "$@" --semver=${SOURCE_VERSION}
+fi
+set "$@" "${IMAGE_NAME}:${IMAGE_TAG}" "${IMAGE_NAME}"
+set "$@" ${IMAGE_TAG} ${SOURCE_VERSION}${IMAGE_QUALIFIER} ${DEPLOY_ENV} latest
+
+vecho "Running \"$@\""
+eval "$@" || exit 1
+
+eval ${DIDACTIC_LOG_DEPLOYMENT_CMD} || exit 1
+
+exit 0
+
+
+
+

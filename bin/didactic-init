@@ -1,0 +1,171 @@
+#!/bin/sh
+PROG=didactic-init
+DESC="Initialize \"DIDACTIC\" script framework in a CircleCI workflow"
+USAGE1="${PROG}"
+
+DIDACTIC_GLOBAL_CF="DIDACTIC.json"
+CITOOLS_REPO_DEFAULT="https://github.com/NCAR/citools.git"
+CITOOLS_TAG_DEFAULT="master"
+CITOOLS_VERBOSE_DEFAULT=true
+DOCKER_USER_DEFAULT="ncar"
+IMAGE_NAME_DEFAULT="${DOCKER_USER_DEFAULT}/${CIRCLE_PROJECT_REPONAME}"
+
+HELP_DESC="
+This script initializes the workspace in a CircleCI workflow for the
+\"DIDACTIC\" framework. It installs additional software, configuration,
+and data files as needed, and supplements the \$INIT_RC file with
+definitions of environment variables used by the other didactic commands.
+Software is installed under \$LOCAL_BIN. Configuration and data files are
+installed under \$STATEDIR.
+
+See DIDACTIC.md.
+"
+HELP_ENV="
+CIRCLE_PROJECT_REPONAME
+    The name of the GitHub repo for the current project. Set by
+    CircleCI.
+
+CIRCLE_PROJECT_USERNAME
+    The owner of the GitHub repo for the current project. Set by
+    CircleCI.
+
+CIRCLE_TAG
+    The release tag that triggered the current CircleCI workflow.
+    Set by CircleCI in \"tag builds\". This must be set.
+
+CITOOLS_REPO
+    If given, the URL of the CITOOLS repository. Default is
+    ${CITOOLS_REPO_DEFAULT}.
+
+CITOOLS_TAG_DEFAULT
+    If given, the git tag to use when checking out CITOOLS repository.
+    Default is ${CITOOLS_TAG_DEFAULT}.
+
+IMAGE_NAME
+    The name of the target docker image, with a leading hostname component
+    (if needed), but without a trailing \":<tag>\" or \"@<digest>\" field.
+    This should be set, but \"${DOCKER_USER_DEFAULT}/\${CIRCLE_PROJECT_REPONAME}\"
+    will be used if it is not.
+
+INIT_RC
+    The name of the file containing environment variable definitions (see
+    FILES). This should be set, but $STATEDIR/init.rc will be used if
+    it is not.
+
+LOCAL_BIN
+    The directory where additional software should be defined for use by
+    CircleCI jobs. If not set, the script's own directory
+    will be used if it is not.
+
+STATEDIR
+    A workspace subdirectory in which state information can be stored
+    for sharing among jobs. This should be set, but ${WORKDIR}/state
+    will be used if it is not.
+
+WORKDIR
+    The root-level workspace directory. This should be set, but
+    ${LOCAL_BIN}/.. will be used if it is not.
+"
+HELP_FILES="
+\${INIT_RC}
+    A file that can be sourced at the start of CircleCI \"run\" job
+    steps to set environment variables. The \"init\" command in this
+    script will append environment variable definitions to this file.
+
+${DIDACTIC_GLOBAL_CF}
+    The main configuration file.
+"
+
+SCRIPTDIR=`cd \`dirname $0\`; pwd`
+. ${SCRIPTDIR}/lib/didactic.rc
+
+cd ${SCRIPTDIR} || exit 1
+REPO_ROOT=`git rev-parse --show-toplevel` || exit 1
+DIDACTIC_GLOBAL_CF="${REPO_ROOT}/${DIDACTIC_GLOBAL_CF}"
+export DIDACTIC_GLOBAL_CF
+if [ ! -f ${DIDACTIC_GLOBAL_CF} ] ; then
+    echo "${PROG}: ${DIDACTIC_GLOBAL_CF}: no such file" >&2
+    exit 1
+fi
+
+# The following are generally set in the CircleCI project configuration,
+# but make sure they are set anyway (to make testing easier)
+WORKDIR="${WORKDIR:-${REPO_ROOT}/..}"
+LOCAL_BIN="${LOCAL_BIN:-${SCRIPTDIR}}"
+if [ ":${LOCAL_BIN}" != ":${SCRIPTDIR}" ] ; then
+    PATH="${LOCAL_BIN}:${PATH}" export PATH
+fi
+STATEDIR="${STATEDIR:-${WORKDIR}/state}"
+INIT_RC="${INIT_RC:-${STATEDIR}/init.rc}"
+CITOOLS_VERBOSE=${CITOOLS_VERBOSE:-${CITOOLS_VERBOSE_DEFAULT}}
+export LOCAL_BIN WORKDIR STATEDIR INIT_RC CITOOLS_VERBOSE
+
+# Install citools
+CITOOLS_REPO="${CITOOLS_REPO:-${CITOOLS_REPO_DEFAULT}}"
+CITOOLS_TAG="${CITOOLS_TAG:-${CITOOLS_TAG_DEFAULT}}"
+check_citools=`type citools 2>/dev/null`
+if [ ":${check_citools}" = ":" ] ; then
+    echo "Installing CITOOLS..." >&2
+    git clone -v --branch ${CITOOLS_TAG:-master} --depth 1 ${CITOOLS_REPO} ${LOCAL_BIN} || exit 1
+else
+    vecho ${check_citools}
+fi
+
+# Initialize basic environment variables
+circle-env ${INIT_RC} || exit 1
+. ${INIT_RC} || exit 1
+
+IMAGE_NAME="${IMAGE_NAME:-${IMAGE_NAME_DEFAULT}}"
+REPO="${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}"
+IMAGE_METADATA="${STATEDIR}/image-metadata"
+export CITOOLS_VERBOSE IMAGE_NAME REPO
+circle-env --add CITOOLS_VERBOSE IMAGE_NAME REPO
+
+. setup-scratchdir.rc
+
+install-jq "${LOCAL_BIN}"
+
+# Load config: set DIDACTIC_CF, and REPO_IS_DIDACTIC_TARGET. If the latter
+# is true, set AUTODEPLOY_AUTOBUILT, DEFAULT_DEPLOY_ENV,
+# DIDACTIC_FIND_IMAGE_CMD, DIDACTIC_REGISTER_IMAGE_CMD,
+# DIDACTIC_CHECK_AUTH_CMD, DIDACTIC_SUBMIT_AUTH_REQUEST_CMD,
+# DIDACTIC_LOG_DEPLOYMENT_CMD, DIDACTIC_REPO, PRERELEASE_ENVIRONMENTS, and
+# PRODUCTION_ENVIRONMENT
+. init-config.rc
+
+# Check if we need AWS CLI
+if [ ":${AWS_ACCESS_KEY}${AWS_SECRET_ACCESS_KEY}${AWS_SESSION_TOKEN}" != ":" ]
+then
+    install-aws-cli "${LOCAL_BIN}"
+fi
+
+#
+# Get the "docker login" command for pushing images, save it in
+# DOCKERHUB_DOCKER_LOGIN or ECR_DOCKER_LOGIN as appropriate (see
+# citools/docker-get-login). Subsequent calls to citools/docker-get-login
+# will use the saved commands
+#
+circle-docker-login-init "${IMAGE_NAME}"`
+
+
+if [ "${REPO_IS_DIDACTIC_TARGET}" = "true" ] ; then
+    if truthy --not "${CIRCLE_TAG_IS_SEMVER}" ; then
+        echo "${PROG}: \$CIRCLE_TAG is not a semantic version string" >&2
+        exit 0
+    fi
+
+    # Break down $CIRCLE_TAG: set RELEASE_TAG, SOURCE_VERSION, DEPLOY_ENV,
+    # TRIGGER_TYPE, IMAGE_QUALIFIER
+    . init-semver-info.rc
+
+    # Check if there is an existing image metadata file registered with
+    # didactic; if so, copy it to ${IMAGE_METADATA} and set IMAGE_TAG
+    IMAGE_TAG=`eval ${DIDACTIC_FIND_IMAGE_CMD}` || exit 1
+    export IMAGE_TAG
+    circle-env --add IMAGE_TAG
+fi
+
+DIDACTIC_INIT=true export DIDACTIC_INIT
+circle-env --add DIDACTIC_INIT
+
+exit 0

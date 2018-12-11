@@ -1,0 +1,85 @@
+#!/bin/sh
+PROG=didactic-mgr-update
+DESC="Trigger a CircleCI build for a project repository"
+USAGE1="${PROG}"
+
+HELP_DESC="
+This script is meant to be run from a CircleCI build for the didactic-mgr
+repository; it is meant to be triggered when an image metadata file is
+committed to a \"project branch\". The script identifies the new image
+metadata file and triggers a CircleCI build in the corresponding project.
+
+The CircleCI workspace must have been initialized; see \"didactic-init\".
+"
+
+SCRIPTDIR=`cd \`dirname $0\`; pwd`
+. ${SCRIPTDIR}/lib/didactic.rc
+
+# Make sure $INIT_RC has been loaded and is properly initialized
+if [ ":${INIT_RC}" = ":" ] ; then
+    echo "${PROG}: INIT_RC must be set. Run \"didactic init\"." >&2
+    exit 1
+fi
+. ${INIT_RC} || exit 1
+if [ ":${DIDACTIC_INIT}" != ":true" ] ; then
+    echo "${PROG}: didactic has not been initialized. Run \"didactic init\"" >&2
+    exit 1
+fi
+
+case ${CIRCLE_BRANCH} in
+    '')
+      echo "${PROG}: Not running from a CircleCI job" >&2
+      exit 1 ;;
+    master)
+      echo "${PROG}: Nothing to be done on master branch" >&2
+      exit 0 ;;
+esac
+
+IFS_SAVE="${IFS}"
+IFS="${IFS}/"
+set : "${CIRCLE_BRANCH}"
+IFS="${IFS_SAVE}"
+
+if [ $# != 3 ] ; then
+    echo "${PROG}: Unexpected format for branch name: ${CIRCLE_BRANCH}" >&2
+    echo "Expecting <owner>/<repo>/<environment>" >&2
+    exit 1
+fi
+TARGET_REPO="$1/$2"
+TARGET_ENV="$3"
+
+cd `git rev-parse --show-toplevel` || exit 1
+
+# Find the most recently committed image metadata file and copy it to
+# ${IMAGE_METADATA}; set IMAGE_TAG to the image name and COMMITINFO to a
+# message fragment describing the commit. Exit with an error code if no file
+# is found
+. mgr-get-lastest-metadata.rc
+
+# The following command should set GIT_REPO, SOURCE_VERSION, IMAGE_QUALIFIER
+. ${IMAGE_METADATA}
+
+if [ "${GIT_REPO}" != "${TARGET_REPO}" ] ; then
+    echo "${PROG}: Image repo name does not match branch name" >&2
+    echo "  (${GIT_REPO} != ${TARGET_REPO})" >&2
+    exit 1
+fi
+
+if [ ":${TARGET_ENV}" = "${PRODUCTION_ENVIRONMENT}" ] ; then
+    RELEASE_TAG="${SOURCE_VERSION}${IMAGE_QUALIFIER}"
+else
+    RELEASE_TAG="${SOURCE_VERSION}-${TARGET_ENV}${IMAGE_QUALIFIER}"
+fi
+export RELEASE_TAG
+
+# Log the \"authorization\" of the image deployment
+didactic-gh-repo-log --write --type=approved \
+                     --project="${TARGET_REPO} --deploy-env="${TARGET_ENV}" \
+                     --image-tag="${IMAGE_TAG}" ${COMMITINFO} || exit 1
+
+vecho "Triggering CircleCI build"
+TRIGGER_BUILD_PATH="/project/github/${REPO}/build"
+echo "{\"tag\":\"${RELEASE_TAG}\"}" |
+    circle-post "${TRIGGER_BUILD_PATH}" >/dev/null || exit 1
+
+exit 0

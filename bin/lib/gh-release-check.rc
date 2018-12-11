@@ -1,0 +1,54 @@
+:
+# Check/enforce didactic prescriptions on release objects
+release_obj=`github-release-util --get-release "${RELEASE_TAG}"`
+if [ ":${release_obj}" = ":" ] ; then
+    echo "${PROG}: repo ${REPO} does not have a \"${RELEASE_TAG}\" release" >&2
+    exit 1
+fi
+if [ ":${SOURCE_VERSION}" = ":" ] ; then
+    echo "${PROG}: release tag is not a semantic version tag" >&2
+    exit 1
+fi
+if [ ":${DEPLOY_ENV}" = ":" ] ; then
+    echo "${PROG}: release tag does not identify a valid environment" >&2
+    exit 1
+fi
+DESIRED_TAG="${RELEASE_TAG}"
+DESIRED_NAME="${SOURCE_VERSION}${IMAGE_QUALIFIER}"
+if [ ":${DEPLOY_ENV}" = ":${PRODUCTION_ENVIRONMENT}" ] ; then
+    IS_PRERELEASE=false
+else
+    IS_PRERELEASE=true
+fi
+
+PATCH_TAG="${RELEASE_TAG}"
+if [ ":${IMAGE_TAG}" = ":" ] ; then
+    # If there is no existing image for this tag, the deploy environment
+    # cannot be the production environment; if it is, we need to retag
+    if [ ":${DEPLOY_ENV}" = ":${PRODUCTION_ENVIRONMENT}" ] ; then
+        DESIRED_TAG="${SOURCE_VERSION}-${DEFAULT_DEPLOY_ENV}${IMAGE_QUALIFIER}"
+        vecho "Constructed new tag: ${DESIRED_TAG}"
+        # if the new tag already exists, we want to patch that object instead
+        # of the one we just found
+        release_obj=`github-release-util --get-release "${DESIRED_TAG}"`
+        if [ ":${release_obj}" != ":" ] ; then
+            PATCH_TAG="${DESIRED_TAG}"
+        fi
+    fi
+fi
+
+data="{
+  \"tag_name\": \"${DESIRED_TAG}\",
+  \"target_commitish\": \"${CIRCLE_SHA1}\",
+  \"name\": \"${DESIRED_NAME}\",
+  \"prerelease\": ${IS_PRERELEASE}
+}"
+echo "${data}" | github-release-util --patch-release "${PATCH_TAG}" || exit 1
+
+if [ ":${DESIRED_TAG}" != ":${RELEASE_TAG}" ] ; then
+    echo "WARNING: the release tag has been changed to \"${DESIRED_TAG}\"" >&2
+    echo "A new build should be triggered automatically" >&2
+    git push --delete origin "${RELEASE_TAG}"
+    exit 1
+fi
+

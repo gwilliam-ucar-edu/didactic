@@ -1,0 +1,102 @@
+#!/bin/sh
+PROG=gh-repo-auth-request
+DESC="Submit a deployment authorization request"
+USAGE1="${PROG}"
+
+DIDACTIC_GH_REPO="https://github.com/gwilliam-ucar-edu/didactic-mgr.git"
+
+HELP_DESC="
+This script implements the \"deployment authorization request\" component
+of the didactic framework. It submits a GitHub \"pull request\" that
+requests the addition of an image metadata file to the appropriate
+didactic-mgr project/environment branch.
+"
+HELP_ENV="
+CIRCLE_PROJECT_USERNAME
+    The git project username.
+
+CIRCLE_PROJECT_REPONAME
+    The git project reponame.
+
+DEPLOY_ENV
+    The target deployment environment to authorize.
+
+IMAGE_METADATA
+    The path to a local copy of the current image metadata file.
+
+IMAGE_TAG
+    The image tag to authorize.
+"
+SCRIPTDIR=`cd \`dirname $0\`; pwd`
+. ${SCRIPTDIR}/didactic.rc || exit 1
+
+check-envvars --prog="${PROG}" DIDACTIC_INIT
+if [ $? != 0 ] ; then
+    echo "${PROG}: didactic has not been initialized. Run \"didactic init\"" >&2
+    exit 1
+fi
+check-envvars --prog="$PROG" CIRCLE_PROJECT_USERNAME CIRCLE_PROJECT_REPONAME \
+                             DEPLOY_ENV IMAGE_METADATA IMAGE_TAG
+
+if [ ! -s "${IMAGE_METADATA}" ] ; then
+    echo "${PROG}: No image available for ${CIRCLE_TAG}" >&2
+    exit 1
+fi
+
+branch="${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}/${DEPLOY_ENV}"
+tstamp=`echo "${IMAGE_TAG}" | sed -e 's/[^-]*-\([0-9]*T[0-9]*Z\).*/\1/'`
+TEMP_BRANCH="${branch}-${tstamp}"
+
+CLONE_DIR="${STATEDIR}/${TEMP_BRANCH}"
+parent=`dirname ${CLONE_DIR}`
+
+vecho "Cloning branch ${branch}..."
+mkdir -p "${parent}" || exit 1
+
+git clone --branch ${branch} --depth 1 ${DIDACTIC_GH_REPO} "${CLONE_DIR}"
+if [ $? != 0 ] ; then
+    echo "${PROG}: unable to clone ${REPO} branch=${branch}" >&2
+    exit 1
+fi
+
+cd ${CLONE_DIR}
+
+vecho "Running git checkout -b ${TEMP_BRANCH}"
+git checkout -b ${TEMP_BRANCH}
+
+revision=`git rev-parse HEAD`
+url=`git config --get remote.origin.url`
+desc="New unapproved image (${IMAGE_TAG}) for ${branch}"
+
+vecho "Copying ${IMAGE_METADATA} to ${IMAGE_TAG}"
+cp "${IMAGE_METADATA}" "${IMAGE_TAG}"
+
+vecho "Running git add ${IMAGE_TAG}..."
+git add "${IMAGE_TAG}"
+
+vecho "Running git commit..."
+git commit -m "${desc}"
+
+vecho "Running git push -u origin ${TEMP_BRANCH}..."
+git push -u origin "${TEMP_BRANCH}"
+
+body="{
+  \"title\": \"${desc}\",
+  \"head\": \"${TEMP_BRANCH}\",
+  \"base\": \"${branch}\",
+  \"body\": \"From ${CIRCLE_BUILD_URL}, trigger type=${TRIGGER_TYPE}\",
+  \"maintainer_can_modify\": false
+}"
+vecho "Pull request POST body: ${body}"
+vecho "Running github-post /repos/${REPO}/pulls..."
+resp=`echo "${body}" | github-post /repos/${REPO}/pulls`
+vecho "Response=${resp}"
+
+echo "Request queued with GitHub"
+
+exit 1
+
+
+
+
+
