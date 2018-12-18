@@ -24,7 +24,7 @@ jobs:
               bin/didactic-init
 
       - persist_to_workspace:
-          root: .
+          root: /tmp/workspace
           paths:
             - bin
             - state
@@ -33,7 +33,7 @@ jobs:
     executor: generic-executor
     steps:
       - attach_workspace:
-          at: .
+          at: /tmp/workspace
 
       - run:
           name: "Read configuration, update didactic-mgr"
