@@ -118,7 +118,8 @@ CITOOLS_TAG="${CITOOLS_TAG:-${CITOOLS_TAG_DEFAULT}}"
 check_citools=`type citools 2>&1`
 if [ $? != 0 ] ; then
     echo "Installing CITOOLS..." >&2
-    git clone -v --branch ${CITOOLS_TAG:-master} --depth 1 ${CITOOLS_REPO} ${LOCAL_BIN} || exit 1
+    git clone -v --branch ${CITOOLS_TAG:-master} --depth 1 ${CITOOLS_REPO} ${LOCAL_BIN}/citools || exit 1
+    PATH="${LOCAL_BIN}/citools:${PATH}" export PATH
 else
     vecho ${check_citools}
 fi
