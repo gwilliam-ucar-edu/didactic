@@ -23,7 +23,7 @@ jobs:
               mkdir -p ${STATEDIR} ${LOCAL_BIN}
               bin/didactic-init
               . ${INIT_RC}
-              ${LOCAL_BIN}/circle-debug-dump
+              circle-debug-dump
 
       - persist_to_workspace:
           root: /tmp/workspace
