@@ -21,8 +21,8 @@ jobs:
           name: "Initialize workspace"
           command: |
               mkdir -p ${STATEDIR} ${LOCAL_BIN}
-              tar cf - bin | (cd ${WORKSPACE} ; tar xvf -)
               bin/didactic-init
+              tar cf - bin | (cd ${WORKSPACE} ; tar xvf -)
               set -v
               . ${INIT_RC}
               set +v
