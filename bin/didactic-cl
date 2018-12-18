@@ -1,124 +1,120 @@
 #!/bin/sh
 PROG=didactic-cl
 DESC="Client interface to didactic"
-USAGE1="${PROG} build <build_args>"
-USAGE2="${PROG} deploy"
+USAGE1="${PROG} --register-image"
+USAGE2="${PROG} --check-authorization"
+USAGE3="${PROG} --register-deployment"
+USAGE4="${PROG} --request-promotion"
 
 HELP_DESC="
 This script is meant to be run by a didactic client from a CircleCI build.
-It supports two operations: \"build\" and \"deploy\".
-
-The \"build\" operation conditionally builds a docker image for the
-current source revision if one is not already \"registered\" with
-didactic; after building the image, it assigns a unique tag, pushes the
-image to its registry, and registers it with didactic. Images are built
-using the citools \"docker-cibuild\" script. Arguments to \"build\" are
-passed through to \"docker-cibuild\".
-
-The \"deploy operation\" confirms that the current image is authorized
-for deployment to the target environment, and if it is authorized, pulls
-the pre-built image, tags it appropriately, re-pushes it, and registers
-the deployment with didactic. If the current image is not authorized for
-deployment, the script submits a request to didactic to authorize it, and
-then exits with an error code so that the CircleCI job fails.
+It acts as an adapter to underlying scripts.
 
 The CircleCI workspace must have been initialized; see \"didactic-init\".
 "
-HELP_ARGS="
-build
-    Conditional build, tag, and push a docker image using
-    \"docker-cibuild\". This is only done if there is no existing image
-    registered with didactic.
+HELP_OPTS="
+--register-image
+    \"Register\" the current docker image; this maps the source release tag
+    to the image so that the image can be retrieved by subsequent CircleCI
+    jobs.
 
-<build_args>
-    Used with \"build\"; all arguments are assumed to be for
-    \"docker-cibuild\".
+--check-authorization
+    Check whether the indicated image is authorized for deployment to the
+    target deployment environment (identified by the DEPLOY_ENV
+    environment variable. If it is authorized, write details of the
+    authorization to standard output and return 0. If it is not authorized,
+    return 1.
 
-deploy
-    Verify that there is an image registered with didactic and that it is
-    authorized for deployment to the target environment. If so, \"deploy\"
-    the image by adding the environment name as a tag to the remote image.
+--register-deployment
+    Notify didactic that an image has been successfully deployed (or
+    more specifically that the image has been tagged with a deployment
+    environment in its shared registry).
+
+--request-promotion
+    Submit a request to authorize an image for deployment to the target
+    deployment environment.
 "
 HELP_ENV="
-Unless otherwise noted, the following environment variables are set by
-\"didactic-init\".
-
-AUTODEPLOY_AUTOBUILT
-    A configuration option that identifies the environments to which an
-    automatically built image can be deployed without explicit
-    authorization.
-
-DEFAULT_DEPLOY_ENV
-    The default deployment environment; when deploying to the default
-    environment in a manually-triggered build, no explicit authorization
-    is required.
-
 DEPLOY_ENV
-    The desired deployment environment.
-
-DIDACTIC_CHECK_AUTH_CMD
-    The command used to check whether the current image is authorized for
-    deployment to the target environment.
-
-DIDACTIC_LOG_DEPLOYMENT_CMD
-    The command used to report a successful deployment.
-
-DIDACTIC_REGISTER_IMAGE_COMMAND
-    The command used to register a newly build image with didactic.
-
-DIDACTIC_SUBMIT_AUTH_REQUEST_CMD
-    The command used to submit a new deployment authorization request.
-
-DOCKER_LOGIN
-    A \"docker login\" command for the remote docker registry.
+    The target deployment environment.
 
 IMAGE_METADATA
-    The path of a local file that stores or should store the image metadata
-    for the target image. Image metadata files are built by
-    \"docker-cibuild\".
+    The local path where didactic stores the image metadata file.
 
 IMAGE_NAME
-    The name of the target docker image, with a leading hostname component
-    (if needed), but without a trailing \":<tag>\" or \"@<digest>\" field.
-    This should be set, but \"${DOCKER_USER_DEFAULT}/\${CIRCLE_PROJECT_REPONAME}\"
-    will be used if it is not.
-
-IMAGE_TAG
-    The docker tag for a registered image; the tag uniquely identifies the
-    image and includes the source version string and the \"image
-    qualifier\" tag. On a \"build\", the presence of this variable implies
-    that no actual build is needed. This is set either by \"didactic-init\"
-    or \"didactic-cl build\".
-
-TRIGGER_TYPE
-    How the CircleCI build was triggered; this is \"automatic\" if the
-    build was triggered by an automatic process (such as a scheduled
-    job that rebuilds images when their base image changes), and
-    \"manual\" otherwise..
-
+    The default name of the image metadata file. Used if the
+    <image_metadata_file> is not given.
 "
 
 SCRIPTDIR=`cd \`dirname $0\`; pwd`
-. ${SCRIPTDIR}/lib/didactic.rc
+. ${SCRIPTDIR}/didactic/didactic.rc
+
+MODE=
+while [ $# != 0 ] ; do
+    case $1 in
+        --register-image)
+            MODE=register-image ;;
+        --check-authorization)
+            MODE=check-authorization ;;
+        --register-deployment)
+            MODE=register-deployment ;;
+        --request-promotion)
+            MODE=request-promotion ;;
+        -*)
+            echo "${PROG}: unknown option: $1" >&2
+            exit 1 ;;
+    esac
+    shift
+done
 
 # Make sure $INIT_RC has been loaded and is properly initialized
 if [ ":${INIT_RC}" = ":" ] ; then
-    echo "${PROG}: INIT_RC must be set. Run \"didactic init\"." >&2
+    echo "${PROG}: INIT_RC must be set. Run \"didactic-init\"." >&2
     exit 1
 fi
 . ${INIT_RC} || exit 1
 if [ ":${DIDACTIC_INIT}" != ":true" ] ; then
-    echo "${PROG}: didactic has not been initialized. Run \"didactic init\"" >&2
+    echo "${PROG}: didactic has not been initialized. Run \"didactic_init\"" >&2
     exit 1
 fi
 
-MODE="$1"
-shift
-
-if [ ":${MODE}" = "build" ] ; then
-    . cl-build || exit 1
-elif [ ":${MODE}" = "deploy" ] ; then
-    . cl-deploy || exit 1
+if [ ":${MODE}" = ":" ] ; then
+    echo "${PROG}: no action specified" >&2
+    echo "${USAGE}" >&2
+    exit 1
+fi
+if [ ! -f ${IMAGE_METADATA} ] ; then
+    echo "${PROG}: ${IMAGE_METADATA}: no such file" >&2
+    exit 1
 fi
 
-exit 0
+IMAGE_TAG=`jq -r .image_tag ${IMAGE_METADATA}` || exit 1
+IMAGE_NAME=`jq -r .image_name ${IMAGE_METADATA}` || exit 1
+export IMAGE_TAG IMAGE_NAME
+circle-env --add IMAGE_TAG IMAGE_NAME
+
+if [ ${MODE} = "register-image" ] ; then
+    remote_name=`docker-image-name --path`
+    docker-tag-push "${IMAGE_NAME}:${IMAGE_TAG}" \
+        "${remote_name}" "${IMAGE_TAG}" \
+        || exit 1
+
+    vecho "Running \"gh-release --register\""
+    gh-release --register || exit 1
+
+elif [ ${MODE} = "check-authorization" ] ; then
+    autodeploy-check && exit 0
+    AUTH=`gh-repo-log --read --type=approved | tail -1`
+    if [ ":${AUTH}" = ":" ] ; then
+        echo "${PROG}: ${IMAGE_NAME} not authorized for deployment to ${DEPLOY_ENV}" >&2
+        exit 1
+    fi
+    echo "${AUTH}"
+
+elif [ ${MODE} = "register-deployment" ] ; then
+    vecho "Running \"gh-repo-log --write --type=deployed\""
+    gh-repo-log --write --type=deployed || exit 1
+
+elif [ ${MODE} = "request-promotion" ] ; then
+    gh-repo-auth-request
+fi

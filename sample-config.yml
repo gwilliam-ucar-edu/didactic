@@ -5,12 +5,14 @@ executors:
       - image: circleci/php:7.2-cli
     working_directory: ~/project
     environment:
-      IMAGE_NAME: "gwilliam0ucar/test"
+      IMAGE_REGISTRY: "registry-1.docker.io"
+      IMAGE_REPO: "gwilliam0ucar"
+      IMAGE_NAME: "test"
       WORKSPACE: "/tmp/workspace"
       LOCAL_BIN: "/tmp/workspace/bin"
       STATEDIR: "/tmp/workspace/state"
       INIT_RC: "/tmp/workspace/state/init.rc"
-      DIDACTIC_REPO: "git@github.com:NCAR/citools.git"
+      DIDACTIC_REPO: "git@github.com:NCAR/didactic.git"
 
 jobs:
 
@@ -33,7 +35,8 @@ jobs:
           name: "Initialize workspace"
           command: |
               mkdir -p ${WORKSPACE}/bin ${WORKSPACE}/state
-              git clone -v --branch ${DIDACTIC_TAG:-master} --depth 1 ${DIDACTIC_REPO} ${WORKSPACE}
+              git clone -v --branch ${DIDACTIC_TAG:-master} --depth 1 \
+                  ${DIDACTIC_REPO} ${WORKSPACE}
               ${WORKSPACE}/bin/didactic-init
 
       - persist_to_workspace:
@@ -54,7 +57,13 @@ jobs:
           name: "Conditionally build, push, and register image"
           command: |
               . ${INIT_RC}
-              didactic-cl build .
+              if [[ -z "${IMAGE_TAG}" ]] ; then
+                  docker-cibuild --metadata=${IMAGE_METADATA} \
+                                 --image-name=${IMAGE_NAME} .
+                  didactic-cl --register-image
+              else
+                  echo "Image ${IMAGE_NAME}:${IMAGE_TAG} already exists"
+              fi
 
       - persist_to_workspace:
           root: /tmp/workspace
@@ -73,7 +82,14 @@ jobs:
           name: "Pull image, tag and repush, log"
           command: |
               . ${INIT_RC}
-              didactic-cl deploy
+              if didactic-cl --check-authorization ; then
+                  docker-tag-push \
+                   ${IMAGE_NAME}:${IMAGE_TAG} \
+                   ${IMAGE_PATH} ${DEPLOY_TAGS}
+                  didactic-cl --register-deployment
+              else
+                  didactic-cl --request-authorization
+              fi
 
 workflows:
   version: 2

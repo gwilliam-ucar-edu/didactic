@@ -1,0 +1,81 @@
+#!/bin/sh
+PROG=autodeploy-check
+DESC="Check if the current image can be auto-deployed"
+USAGE1="${PROG}"
+
+HELP_DESC="
+
+"
+HELP_ENV="
+AUTODEPLOY
+    A list containing the names of all environments to which manually
+    build images can be deployed without an explicit (manual) authorization
+    step.
+
+AUTODEPLOY_AUTOBUILT
+    A list containing the names of all environments to which automatically
+    build images can be deployed without an explicit (manual) authorization
+    step.
+
+DIDACTIC_CF
+    The project-specific didactic configuration file.
+
+DEFAULT_DEPLOY_ENV
+    The default deployment environment.
+
+DEPLOY_ENV
+    The target deployment environment.
+
+PRERELEASE_ENVIRONMENTS
+    A list of valid prerelease environment names.
+
+PRODUCTION_ENVIRONMENT
+    The name of the production environment.
+
+TRIGGER_TYPE
+    Set to \"automatic\" if the CircleCI build was triggered by an automated
+    process and not human action; \"manual\" otherwise.
+"
+SCRIPTDIR=`cd \`dirname $0\`; pwd`
+. ${SCRIPTDIR}/didactic.rc || exit 1
+
+# Make sure $INIT_RC has been loaded and is properly initialized
+if [ ":${INIT_RC}" = ":" ] ; then
+    echo "${PROG}: INIT_RC must be set. Run \"didactic-init\"." >&2
+    exit 1
+fi
+check-envvars --prog="${PROG}" DIDACTIC_CF DEFAULT_DEPLOY_ENV DEPLOY_ENV \
+              TRIGGER_TYPE PRERELEASE_ENVIRONMENTS PRODUCTION_ENVIRONMENT \
+ || exit 1
+
+if [ ":${TRIGGER_TYPE}" = ":manual" ] ; then
+    set : `jq -r '.autodeploy[]' ${DIDACTIC_CF}`
+    shift
+    if [ $# != 0 ] ; then
+        if expr " $* " : ".* ${DEPLOY_ENV} .*" >/dev/null ; then
+            echo "Images can be auto-deployed to ${DEPLOY_ENV} in manual builds"
+            exit 0
+        fi
+    fi
+elif [ ":${TRIGGER_TYPE}" = ":automatic" ] ; then
+    set : `jq -r '.autodeploy_autobuilt[]' ${DIDACTIC_CF}`
+    shift
+    if [ $# != 0 ] ; then
+        if expr " $* " : ".* ${DEPLOY_ENV} .*" >/dev/null ; then
+            set : `gh-repo-log --read --type=approved --deploy-env='' \
+                               --source_version=${SOURCE_VERSION} | \
+                   sed -e 's/.*approved for deployment to \([^ ]*\) .*/\1/'`
+            shift
+            if expr " $* " : ".* ${DEPLOY_ENV} .*" >/dev/null ; then
+                echo "Rebuilt images can be auto-deployed to ${DEPLOY_ENV} in automatic builds"
+                exit 0
+            fi
+        fi
+    fi
+else
+    echo "${PROG}: bad TRIGGER_TYPE: \"${TRIGGER_TYPE}\"" >&2
+fi
+exit 1
+
+
+

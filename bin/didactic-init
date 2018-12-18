@@ -3,12 +3,14 @@ PROG=didactic-init
 DESC="Initialize \"DIDACTIC\" script framework in a CircleCI workflow"
 USAGE1="${PROG}"
 
+DIDACTIC_REPO=gwilliam-ucar-edu/didactic
 DIDACTIC_GLOBAL_CF="DIDACTIC.json"
 CITOOLS_REPO_DEFAULT="https://github.com/NCAR/citools.git"
 CITOOLS_TAG_DEFAULT="master"
 CITOOLS_VERBOSE_DEFAULT=true
-DOCKER_USER_DEFAULT="ncar"
-IMAGE_NAME_DEFAULT="${DOCKER_USER_DEFAULT}/${CIRCLE_PROJECT_REPONAME}"
+IMAGE_REGISTRY_DEFAULT="registry-1.docker.io"
+IMAGE_REPO_DEFAULT="ncar"
+IMAGE_NAME_DEFAULT="${CIRCLE_PROJECT_REPONAME}"
 
 HELP_DESC="
 This script initializes the workspace in a CircleCI workflow for the
@@ -17,6 +19,9 @@ and data files as needed, and supplements the \$INIT_RC file with
 definitions of environment variables used by the other didactic commands.
 Software is installed under \$LOCAL_BIN. Configuration and data files are
 installed under \$STATEDIR.
+
+If successful, the script writes the value of \${INIT_RC} to standard
+output.
 
 See DIDACTIC.md.
 "
@@ -42,10 +47,16 @@ CITOOLS_TAG_DEFAULT
     Default is ${CITOOLS_TAG_DEFAULT}.
 
 IMAGE_NAME
-    The name of the target docker image, with a leading hostname component
-    (if needed), but without a trailing \":<tag>\" or \"@<digest>\" field.
-    This should be set, but \"${DOCKER_USER_DEFAULT}/\${CIRCLE_PROJECT_REPONAME}\"
-    will be used if it is not.
+    The name of the target docker image. If not set, 
+    \${CIRCLE_PROJECT_REPONAME}\" is used.
+
+IMAGE_REGISTRY
+    The docker image registry name. If not set, \"${IMAGE_REGISTRY_DEFAULT}\"
+    is used.
+
+IMAGE_REPO
+    The docker image repository name. If not set, \${IMAGE_REPO_DEFAULT}\" is
+    used.
 
 INIT_RC
     The name of the file containing environment variable definitions (see
@@ -59,10 +70,10 @@ LOCAL_BIN
 
 STATEDIR
     A workspace subdirectory in which state information can be stored
-    for sharing among jobs. This should be set, but ${WORKDIR}/state
+    for sharing among jobs. This should be set, but ${WORKSPACE}/state
     will be used if it is not.
 
-WORKDIR
+WORKSPACE
     The root-level workspace directory. This should be set, but
     ${LOCAL_BIN}/.. will be used if it is not.
 "
@@ -77,7 +88,7 @@ ${DIDACTIC_GLOBAL_CF}
 "
 
 SCRIPTDIR=`cd \`dirname $0\`; pwd`
-. ${SCRIPTDIR}/lib/didactic.rc
+. ${SCRIPTDIR}/didactic/didactic.rc
 
 cd ${SCRIPTDIR} || exit 1
 REPO_ROOT=`git rev-parse --show-toplevel` || exit 1
@@ -90,17 +101,18 @@ fi
 
 # The following are generally set in the CircleCI project configuration,
 # but make sure they are set anyway (to make testing easier)
-WORKDIR="${WORKDIR:-${REPO_ROOT}/..}"
+WORKSPACE="${WORKSPACE:-${REPO_ROOT}/..}"
+
 LOCAL_BIN="${LOCAL_BIN:-${SCRIPTDIR}}"
 if [ ":${LOCAL_BIN}" != ":${SCRIPTDIR}" ] ; then
     PATH="${LOCAL_BIN}:${PATH}" export PATH
 fi
-STATEDIR="${STATEDIR:-${WORKDIR}/state}"
+STATEDIR="${STATEDIR:-${WORKSPACE}/state}"
 INIT_RC="${INIT_RC:-${STATEDIR}/init.rc}"
 CITOOLS_VERBOSE=${CITOOLS_VERBOSE:-${CITOOLS_VERBOSE_DEFAULT}}
-export LOCAL_BIN WORKDIR STATEDIR INIT_RC CITOOLS_VERBOSE
+export LOCAL_BIN WORKSPACE STATEDIR INIT_RC CITOOLS_VERBOSE
 
-# Install citools
+# Install citools if necessary
 CITOOLS_REPO="${CITOOLS_REPO:-${CITOOLS_REPO_DEFAULT}}"
 CITOOLS_TAG="${CITOOLS_TAG:-${CITOOLS_TAG_DEFAULT}}"
 check_citools=`type citools 2>/dev/null`
@@ -115,21 +127,21 @@ fi
 circle-env ${INIT_RC} || exit 1
 . ${INIT_RC} || exit 1
 
+eval `docker-image-name`
+IMAGE_REGISTRY=`echo "${IMAGE_REGISTRY:-${IMAGE_REGISTRY_DEFAULT}}" |
+  sed -e 's:/*$::'`
+IMAGE_REPO=`echo "${IMAGE_REPO:-${IMAGE_REPO_DEFAULT}}" |
+  sed -e 's:/*$::'`
 IMAGE_NAME="${IMAGE_NAME:-${IMAGE_NAME_DEFAULT}}"
-REPO="${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}"
-IMAGE_METADATA="${STATEDIR}/image-metadata"
-export CITOOLS_VERBOSE IMAGE_NAME REPO
-circle-env --add CITOOLS_VERBOSE IMAGE_NAME REPO
-
-. setup-scratchdir.rc
+RELEASE_TAG=`parse-semver -i "${RELEASE_TAG:-${CIRCLE_TAG}}"`
+GH_REPO="${GH_REPO:-${CIRCLE_PROJECT_USERNAME}/${CIRCLE_PROJECT_REPONAME}}"
+export IMAGE_REGISTRY IMAGE_REPO IMAGE_NAME GH_REPO
+circle-env --add IMAGE_REGISTRY IMAGE_REPO IMAGE_NAME RELEASE_TAG GH_REPO
 
 install-jq "${LOCAL_BIN}"
 
 # Load config: set DIDACTIC_CF, and REPO_IS_DIDACTIC_TARGET. If the latter
-# is true, set AUTODEPLOY_AUTOBUILT, DEFAULT_DEPLOY_ENV,
-# DIDACTIC_FIND_IMAGE_CMD, DIDACTIC_REGISTER_IMAGE_CMD,
-# DIDACTIC_CHECK_AUTH_CMD, DIDACTIC_SUBMIT_AUTH_REQUEST_CMD,
-# DIDACTIC_LOG_DEPLOYMENT_CMD, DIDACTIC_REPO, PRERELEASE_ENVIRONMENTS, and
+# is true, set DEFAULT_DEPLOY_ENV, PRERELEASE_ENVIRONMENTS, and
 # PRODUCTION_ENVIRONMENT
 . init-config.rc
 
@@ -139,33 +151,43 @@ then
     install-aws-cli "${LOCAL_BIN}"
 fi
 
-#
-# Get the "docker login" command for pushing images, save it in
-# DOCKERHUB_DOCKER_LOGIN or ECR_DOCKER_LOGIN as appropriate (see
-# citools/docker-get-login). Subsequent calls to citools/docker-get-login
-# will use the saved commands
-#
-circle-docker-login-init "${IMAGE_NAME}"`
-
+circle-docker-login-init ${IMAGE_REGISTRY}
 
 if [ "${REPO_IS_DIDACTIC_TARGET}" = "true" ] ; then
-    if truthy --not "${CIRCLE_TAG_IS_SEMVER}" ; then
-        echo "${PROG}: \$CIRCLE_TAG is not a semantic version string" >&2
+    parse-semver "${RELEASE_TAG}"
+    if [ $? != 0 ] ; then
+        echo "${PROG}: \$RELEASE_TAG/\$CIRCLE_TAG not a semantic version string" >&2
         exit 0
     fi
 
     # Break down $CIRCLE_TAG: set RELEASE_TAG, SOURCE_VERSION, DEPLOY_ENV,
-    # TRIGGER_TYPE, IMAGE_QUALIFIER
+    # TRIGGER_TYPE, IMAGE_QUALIFIER, and DEPLOY_TAGS
     . init-semver-info.rc
 
+    METADATA_DIR="${STATEDIR}/metadata"
+    IMAGE_METADATA="${METADATA_DIR}/${IMAGE_NAME}:${SOURCE_VERSION}${IMAGE_QUALIFIER}"
+    export IMAGE_METADATA
+    circle-env --add IMAGE_METADATA
+    mkdir -p `dirname ${IMAGE_METADATA}`
+
+    # Make sure the GitHub release object is set up correctly
+    if [ ":${GH_RELEASE_INITIALIZED}" = ":" ] ; then
+        gh-release --init || exit 1
+        GH_RELEASE_INITIALIZED=true
+    fi
+
     # Check if there is an existing image metadata file registered with
-    # didactic; if so, copy it to ${IMAGE_METADATA} and set IMAGE_TAG
-    IMAGE_TAG=`eval ${DIDACTIC_FIND_IMAGE_CMD}` || exit 1
-    export IMAGE_TAG
-    circle-env --add IMAGE_TAG
+    # didactic; if so, copy it to ${IMAGE_METADATA} and set
+    # IMAGE_TAG and IMAGE_PATH
+    IMAGE_TAG=`gh-release --find` || exit 1
+    export GH_RELEASE_INITIALIZED IMAGE_TAG
+    IMAGE_PATH=`docker-image-name --path`
+    export IMAGE_PATH
+    circle-env --add GH_RELEASE_INITIALIZED IMAGE_TAG IMAGE_PATH
 fi
 
 DIDACTIC_INIT=true export DIDACTIC_INIT
 circle-env --add DIDACTIC_INIT
 
+echo ${INIT_RC}
 exit 0

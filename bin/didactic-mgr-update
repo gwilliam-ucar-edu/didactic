@@ -13,18 +13,10 @@ The CircleCI workspace must have been initialized; see \"didactic-init\".
 "
 
 SCRIPTDIR=`cd \`dirname $0\`; pwd`
-. ${SCRIPTDIR}/lib/didactic.rc
+. ${SCRIPTDIR}/didactic/didactic.rc
 
-# Make sure $INIT_RC has been loaded and is properly initialized
-if [ ":${INIT_RC}" = ":" ] ; then
-    echo "${PROG}: INIT_RC must be set. Run \"didactic init\"." >&2
-    exit 1
-fi
-. ${INIT_RC} || exit 1
-if [ ":${DIDACTIC_INIT}" != ":true" ] ; then
-    echo "${PROG}: didactic has not been initialized. Run \"didactic init\"" >&2
-    exit 1
-fi
+INIT_RC=`didactic-init` || exit 1
+. ${INIT_RC}
 
 case ${CIRCLE_BRANCH} in
     '')
@@ -56,12 +48,14 @@ cd `git rev-parse --show-toplevel` || exit 1
 # is found
 . mgr-get-lastest-metadata.rc
 
-# The following command should set GIT_REPO, SOURCE_VERSION, IMAGE_QUALIFIER
+GH_REPO=`jq -r .git_repo ${IMAGE_METADATA}`
+SOURCE_VERSION=`jq -r .source_version ${IMAGE_METADATA}`
+IMAGE_QUALIFIER=`jq -r .image_qualifier ${IMAGE_METADATA}`
 . ${IMAGE_METADATA}
 
-if [ "${GIT_REPO}" != "${TARGET_REPO}" ] ; then
+if [ "${GH_REPO}" != "${TARGET_REPO}" ] ; then
     echo "${PROG}: Image repo name does not match branch name" >&2
-    echo "  (${GIT_REPO} != ${TARGET_REPO})" >&2
+    echo "  (${GH_REPO} != ${TARGET_REPO})" >&2
     exit 1
 fi
 
@@ -78,7 +72,7 @@ didactic-gh-repo-log --write --type=approved \
                      --image-tag="${IMAGE_TAG}" ${COMMITINFO} || exit 1
 
 vecho "Triggering CircleCI build"
-TRIGGER_BUILD_PATH="/project/github/${REPO}/build"
+TRIGGER_BUILD_PATH="/project/github/${GH_REPO}/build"
 echo "{\"tag\":\"${RELEASE_TAG}\"}" |
     circle-post "${TRIGGER_BUILD_PATH}" >/dev/null || exit 1
 

@@ -9,7 +9,6 @@ executors:
       LOCAL_BIN: "/tmp/workspace/bin"
       STATEDIR: "/tmp/workspace/state"
       INIT_RC: "/tmp/workspace/state/init.rc"
-      DIDACTIC_REPO: "git@github.com:gwilliam-ucar-edu/didactic.git"
 
 jobs:
 
@@ -21,12 +20,11 @@ jobs:
       - run:
           name: "Initialize workspace"
           command: |
-              mkdir -p ${WORKSPACE}/bin ${WORKSPACE}/state
-              git clone -v --branch ${DIDACTIC_TAG:-master} --depth 1 ${DIDACTIC_REPO} ${WORKSPACE}
-              ${WORKSPACE}/bin/didactic-init
+              mkdir -p ${STATEDIR} ${LOCAL_BIN}
+              bin/didactic-init
 
       - persist_to_workspace:
-          root: /tmp/workspace
+          root: .
           paths:
             - bin
             - state
@@ -35,13 +33,27 @@ jobs:
     executor: generic-executor
     steps:
       - attach_workspace:
-          at: /tmp/workspace
+          at: .
 
       - run:
-          name: "Read configuration, update didactic-mgr, wiki"
+          name: "Read configuration, update didactic-mgr"
           command: |
               . ${INIT_RC}
               didactic-update
+
+      - run:
+          name: "Generate documentation"
+          command: |
+              . ${INIT_RC}
+              set +e
+              git config --global user.email "sweg-ci@ucar.edu"
+              git config --global user.name "NCAR SWEG CI"
+              git clone https://${GH_TOKEN}@github.com/${REPO}.wiki.git /tmp/wiki
+              ./citools-docgen --bindir=bin /tmp/wiki
+              cd /tmp/wiki
+              git add .
+              git commit -m 'Latest doc build'
+              git push
 
 workflows:
   version: 2

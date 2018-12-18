@@ -1,0 +1,222 @@
+#!/bin/sh
+PROG=gh-release
+DESC="Map image metadata files using Github \"release assets\""
+USAGE1="${PROG} --init|--find|--register"
+
+HELP_DESC="
+This script implements the \"image/version mapping\" component of
+the didactic framework using GitHub \"release assets\".
+
+The CircleCI workspace must have been initialized; see \"didactic-init\".
+
+The name of a metadata file asset is the \"<image_name>:<image_tag>\".
+
+The didactic framework prescribes that release objects have the following
+attributes:
+ - The associated tag (\"tag_name\") is a valid semantic version string.
+ - If the tag has a pre-release component, it must be an approved name;
+   approved names can be defined in the PRERELEASE_ENVIRONMENTS
+   environment variable.
+ - The release *name* is the release *tag* without a prerelease
+   component (e.g. if the tag is \"1.0.0-test+build1\", the name is
+   \"1.0.0+build1\".).
+ - The release is associated with a specific commit SHA (not a branch).
+ - When an associated image is deployed, an image metadata file is
+   uploaded as an asset to the release and given the name
+     <image_name>--<source_version>-<timestamp>[<image_qualifier>], where
+   <image_name> is the docker image name without repository, repo, or
+   tag components, <source_version> is the \"major.minor.patch\" part of
+   the release tag, <timestamp> is a compact UTC timestamp indicating the
+   image creation time, and <image-qualifier> is the metadata portion of
+   the release tag (if not empty, and with its leading \"+\" replaced with
+   \"-\"). (Note that `--` is used to separate the <image_name> from the
+   rest of the name because GitHub has a (undocumented?) restriction on asset
+   names: punctuation other than ., -, _ is silently mapped to . on upload.)
+ - If there is no metadata file asset corresponding to the current
+   release tag, the release tag must have a \"prerelease\" component.
+"
+HELP_ARGS="
+--init
+    Verifies that the GitHub release object exists and is configured
+    correctly. It is generally executed at the start of a CircleCI
+    workflow.
+ 
+    If either of the first two prescriptions described earlier is invalid,
+    the script will write an error message and exit with return code 1,
+    which should cause the invoking CircleCI job to fail.
+
+    It will enforce the remaining prescriptions by modifying the release
+    object if necessary.
+
+    In the case of the last prescription, if the release tag needs to be
+    changed from a \"production deployment\" tag, the new tag will use
+    the default deployment environment. In this case, the rc file will
+    run \"exit 1\" after making the change to the release object and
+    deleting the old tag; note the change of tag should trigger a new
+    CircleCI job with the new tag.
+    
+--find
+    Check if there is an image metadata file registered with didactic for
+    the current release tag. If so, download the file to \${IMAGE_METADATA}
+    and print the image tag to standard output.
+
+--register
+    Register a new image metadata file with didactic.
+"
+HELP_ENV="
+CIRCLE_SHA1
+    The git revision SHA1 hash for the current project source release.
+
+DEFAULT_DEPLOY_ENV
+    The default deployment environment.
+
+DEPLOY_ENV
+    The target deployment environment.
+
+IMAGE_METADATA
+    The path of a local directory for image metadata files.
+
+IMAGE_NAME
+    The image name, which is used as the name of the metadata file.
+
+IMAGE_QUALIFIER
+    An optional string used to distinguish different builds of the same
+    source revision. It is the \"metadata\" part of the release's semantic
+    version string, with \"-\" in place of the leading \"+\".
+
+IMAGE_TAG
+    The unique tag for the image. Must be set when registering.
+
+PRODUCTION_ENVIRONMENT
+    The name of the production environment.
+
+RELEASE_TAG
+    The target release version tag, which must be a semantic version
+    string.
+
+SOURCE_VERSION
+    The semantic version \"major.minor.patch\" string for the source
+    release.
+"
+SCRIPTDIR=`cd \`dirname $0\`; pwd`
+. ${SCRIPTDIR}/didactic.rc || exit 1
+
+# Make sure $INIT_RC has been loaded and is properly initialized
+if [ ":${INIT_RC}" = ":" ] ; then
+    echo "${PROG}: INIT_RC must be set. Run \"didactic-init\"." >&2
+    exit 1
+fi
+check-envvars --prog="${PROG}" DEFAULT_DEPLOY_ENV DEPLOY_ENV IMAGE_METADATA \
+              IMAGE_NAME PRERELEASE_ENVIRONMENTS PRODUCTION_ENVIRONMENT \
+              SOURCE_VERSION || exit 1
+
+ARG="$1"
+
+if [ ":${ARG}" = ":" ] ; then
+    echo "${PROG}: one of \"--init\", \"--find\" or \"--register\" is required" >&2
+    echo "${USAGE}" >&2
+    exit 1
+
+elif [ ":${ARG}" = ":--init" ] ; then
+    # Check/enforce didactic prescriptions on release objects
+    release_obj=`github-release-util --get-release "${RELEASE_TAG}"`
+    if [ ":${release_obj}" = ":" ] ; then
+        echo "${PROG}: repo ${GH_REPO} does not have a \"${RELEASE_TAG}\" release" >&2
+        exit 1
+    fi
+    if [ ":${SOURCE_VERSION}" = ":" ] ; then
+        echo "${PROG}: release tag is not a semantic version tag" >&2
+        exit 1
+    fi
+    if [ ":${DEPLOY_ENV}" = ":" ] ; then
+        echo "${PROG}: release tag does not identify a valid environment" >&2
+        exit 1
+    fi
+    body=`echo "${release_obj}" | jq .body`
+    draft=`echo "${release_obj}" | jq .draft`
+    DESIRED_TAG="${RELEASE_TAG}"
+    DESIRED_NAME="${SOURCE_VERSION}${IMAGE_QUALIFIER}"
+    if [ ":${DEPLOY_ENV}" = ":${PRODUCTION_ENVIRONMENT}" ] ; then
+        IS_PRERELEASE=false
+    else
+        IS_PRERELEASE=true
+    fi
+
+    PATCH_TAG="${RELEASE_TAG}"
+    if [ ":${IMAGE_TAG}" = ":" ] ; then
+        # If there is no existing image for this tag, the deploy environment
+        # cannot be the production environment; if it is, we need to retag
+        if [ ":${DEPLOY_ENV}" = ":${PRODUCTION_ENVIRONMENT}" ] ; then
+            DESIRED_TAG="${SOURCE_VERSION}-${DEFAULT_DEPLOY_ENV}${IMAGE_QUALIFIER}"
+            vecho "Constructed new tag: ${DESIRED_TAG}"
+            # if the new tag already exists, we want to patch that object
+            # instead of the one we just found
+            release_obj=`github-release-util --get-release "${DESIRED_TAG}"`
+            if [ ":${release_obj}" != ":" ] ; then
+                PATCH_TAG="${DESIRED_TAG}"
+            fi
+        fi
+    fi
+
+    github-release-util --patch-release "${PATCH_TAG}" <<EOF || exit 1
+{
+  "tag_name": "${DESIRED_TAG}",
+  "target_commitish": "${CIRCLE_SHA1}",
+  "name": "${DESIRED_NAME}",
+  "body": ${body},
+  "draft": ${draft},
+  "prerelease": ${IS_PRERELEASE}
+}
+EOF
+    if [ ":${DESIRED_TAG}" != ":${RELEASE_TAG}" ] ; then
+        echo "WARNING: the release tag has been changed to \"${DESIRED_TAG}\"" >&2
+        echo "A new build should be triggered automatically" >&2
+        result=`git push --delete origin "${RELEASE_TAG}" 2>&1`
+        expr "${result}" : "error.*remote ref does not exist" >/dev/null
+        if [ $? != 0 ] ; then
+            echo "${result}" >&2
+        fi
+        exit 1
+    fi
+
+elif [ ":${ARG}" = ":--find" ] ; then
+    IMRE=`echo "${IMAGE_NAME}" | sed -e 's/\./\\\\./g'`
+    SVRE=`parse-semver -n "${RELEASE_TAG}" | sed -e 's/\./\\\\./g'`
+    IQRE=`parse-semver -m "${RELEASE_TAG}" | sed -e 's/\./\\\\./g' -e 's/\+/-/'`
+    REGEX="${IMRE}--${SVRE}-[0-9]*T[0-9]*Z${IQRE}$"
+
+    github-release-util --download-asset="${REGEX}" "${RELEASE_TAG}" >${IMAGE_METADATA}
+    if [ -s ${IMAGE_METADATA} ] ; then
+        IMAGE_TAG=`jq -r .image_tag ${IMAGE_METADATA}`
+    else
+        IMAGE_TAG=
+    fi
+    export IMAGE_TAG
+    circle-env --add IMAGE_TAG
+
+    echo "${IMAGE_TAG}"
+
+elif [ ":${ARG}" = ":--register" ] ; then
+    if [ ":${IMAGE_TAG}" = ":" ] ; then
+        echo "${PROG} --register: IMAGE_TAG must be set" >&2
+        exit 1
+    fi
+    if [ ! -s "${IMAGE_METADATA}" ] ; then
+        echo "${PROG} --register: ${IMAGE_METADATA} must contain data" >&2
+        exit 1
+    fi
+    IMAGE_TAG=`jq -r .image_tag ${IMAGE_METADATA}`
+    ASSET="${IMAGE_NAME}--${IMAGE_TAG}"
+
+    vecho "Running \"github-release-util --upload-asset=${IMAGE_METADATA} --asset=${ASSET}\""
+    github-release-util --upload-asset="${IMAGE_METADATA}" --asset="${ASSET}" \
+     || exit 1
+
+else
+    echo "${PROG}: invalid option: $1" >&2
+    echo "${USAGE}" >&2
+    exit 1
+fi
+exit 0
+
+

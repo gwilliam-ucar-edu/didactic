@@ -1,0 +1,162 @@
+#!/bin/sh
+PROG=didactic-promote
+DESC="Authorize/trigger a deployment outside a CircleCI job"
+USAGE1="${PROG} --project=<user/repo> --release=<release_tag> --env=<env> \
+                       [--user=<github_user>] [-v|--verbose]"
+
+HELP_DESC="
+Authorize/trigger a project deployment using \"didactic\".
+
+This script is meant to be run outside a CircleCI job, from within
+a clone of the \"didactic\" repo. To run it successfully, you must
+have push permission the target branch in the \"didactic-mgr\" repo.
+"
+HELP_OPTS="
+--project=<user/repo>
+    The GitHub username-slash-reponame of a project that uses didactic.
+
+--release=<release_tag>
+    A semantic version tag that identifies the existing target image.
+
+--env=<env>
+    The new deployment environment.
+
+--user=<github_user>
+    Use basic authentication when using the GitHub API, with the given
+    GitHub user.
+
+-v|--verbose
+    Be verbose.
+"
+HELP_ENV="
+DIDACTIC_CFn
+    The didactic configuration file.
+
+GH_TOKEN
+   If given, a GitHub Personal API Token that will be used to authenticate.
+
+GH_USER
+   If given, use basic authentication with the given user. Required if
+   GH_TOKEN is not set and --user is not given.
+"
+
+SCRIPTDIR=`cd \`dirname $0\`; pwd`
+. ${SCRIPTDIR}/didactic/didactic.rc
+
+PROJECT=
+RELEASE_TAG=
+CITOOLS_VERBOSE=false
+NEW_ENV=
+while [ $# != 0 ] ; do
+    case $1 in 
+        --env=*)
+            NEW_ENV=`expr "$1" : '--env=\(.*\)$'` ;;
+        --project=*)
+            PROJECT=`expr "$1" : '--project=\(.*\)$'` ;;
+        --release=*)
+            RELEASE_TAG=`expr "$1" : '--release=\(.*\)$'` ;;
+        --user=*)
+            GH_USER=`expr "$1" : '--user=\(.*\)$'`
+            export GH_USER ;;
+        -v|--verbose)
+            CITOOLS_VERBOSE=true ;;
+        -*)
+            echo "${PROG}: unknown option: $1" >&2
+            exit 1 ;;
+        *)
+            echo "${PROG}: bad argument: $1" >&2
+            exit 1 ;;
+    esac
+    shift
+done
+if [ ":${PROJECT}" = ":" ] ; then
+    echo "${PROG}: --project is required" >&2
+    exit 1
+fi
+if [ ":${RELEASE_TAG}" = ":" ] ; then
+    echo "${PROG}: --release is required" >&2
+    exit 1
+else
+    parse-semver "${RELEASE_TAG}"
+    if [ $? != 0 ] ; then
+        echo "${PROG}: release tag is not a valid semver string" >&2
+        exit 1
+    fi
+fi
+if [ ":${GH_TOKEN}${GH_USER}" = ":" ] ; then
+    echo "${PROG}: one of GH_TOKEN or GH_USER must be set" >&2
+    exit 1
+fi
+export CITOOLS_VERBOSE
+REPO_ROOT=`git rev-parse --show-toplevel` || exit 1
+url=`git config --get remote.origin.url`
+repo=`basename "${url}" .git`
+
+if [ ":${repo}" != ":didactic" ] ; then
+    echo "${PROG}: this must be run from a clone of \"didactic\"" >&2
+    exit 1
+fi
+WORKSPACE="${REPO_ROOT}/workspace"
+LOCAL_BIN="${WORKSPACE}/bin"
+STATEDIR="${WORKSPACE}/state"
+INIT_RC="${INIT_RC:-${STATEDIR}/init.rc}"
+GH_REPO="${PROJECT}"
+IMAGE_NAME=`basename ${GH_REPO}`
+GH_RELEASE_INITIALIZED=true
+export WORKSPACE LOCAL_BIN STATEDIR INIT_RC GH_REPO IMAGE_NAME \
+       GH_RELEASE_INITIALIZED RELEASE_TAG
+if [ -d ${WORKSPACE} ] ; then
+    rm -rf ${WORKSPACE}/*
+fi
+mkdir -p ${LOCAL_BIN} ${STATEDIR}
+
+# Setting GH_REPO, IMAGE_NAME and RELEASE_TAG will make didactic-init act as
+# if this were a deployment build in the target project. It will download the
+# image metadata file to ${IMAGE_METADATA}.
+#
+vecho "Running didactic-init..."
+INIT_RC=`didactic-init` || exit 1
+vecho "Sourcing ${INIT_RC}..."
+. ${INIT_RC}
+
+if [ ! -s "${IMAGE_METADATA}" ] ; then
+    echo "${PROG}: unable to find image metadata for ${GH_REPO} ${RELEASE_TAG}" >&2
+    exit 1
+fi
+
+. gh-repo.rc
+
+branch="${GH_REPO}/${NEW_ENV}"
+
+CLONE_DIR="${STATEDIR}/didactic-mgr"
+parent=`dirname ${CLONE_DIR}`
+
+rm -rf "${CLONE_DIR}"
+
+vecho "Cloning ${DIDACTIC_GH_REPO} ${branch}..."
+mkdir -p "${parent}" || exit 1
+
+git clone --branch ${branch} --depth 1 ${DIDACTIC_GH_URL} "${CLONE_DIR}"
+if [ $? != 0 ] ; then
+    echo "${PROG}: unable to clone ${GH_REPO} branch=${branch}" >&2
+    exit 1
+fi
+IMAGE_NAME=`jq -r .image_name ${IMAGE_METADATA}`
+IMAGE_TAG=`jq -r .image_tag ${IMAGE_METADATA}`
+ASSET="${IMAGE_NAME}--${IMAGE_TAG}"
+
+cp "${IMAGE_METADATA}" "${CLONE_DIR}/${ASSET}" || exit 1
+
+cd "${CLONE_DIR}" || exit 1
+
+vecho "Running \"git add ${ASSET}\"..."
+git add "${ASSET}" | exit 1
+
+vecho "Running \"git commit -m 'New deployment: ${ASSET}'\"..."
+git commit -m 'New deployment: ${ASSET}' | exit 1
+
+vecho "Running \"git push\"..."
+git push | exit 1
+
+exit 0
+

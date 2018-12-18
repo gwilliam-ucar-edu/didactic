@@ -1,16 +1,13 @@
 #!/bin/sh
 PROG=didactic-update
-DESC="Update the didactic-mgr repo and the didactic wiki"
+DESC="Update the didactic-mgr repo"
 USAGE1="${PROG}"
 
 HELP_DESC="
 This script is meant to be run from a CircleCI build for the didactic repo.
 It reads the \"didactic.json\" configuration file and ensures that all
 projects named in the file are appropriate configured in the \"didactic-mgr\"
-repository. It also generates documentation for the \"didactic\" GitHub
-wiki using the latest versinos of all scripts.
-
-The CircleCI workspace must have been initialized; see \"didactic-init\".
+repository.
 "
 HELP_ENV="
 DIDACTIC_CF
@@ -18,29 +15,143 @@ DIDACTIC_CF
 "
 
 SCRIPTDIR=`cd \`dirname $0\`; pwd`
-. ${SCRIPTDIR}/lib/didactic.rc
+. ${SCRIPTDIR}/didactic/didactic.rc
 
-# Make sure $INIT_RC has been loaded and is properly initialized
-if [ ":${INIT_RC}" = ":" ] ; then
-    echo "${PROG}: INIT_RC must be set. Run \"didactic init\"." >&2
-    exit 1
-fi
-. ${INIT_RC} || exit 1
-if [ ":${DIDACTIC_INIT}" != ":true" ] ; then
-    echo "${PROG}: didactic has not been initialized. Run \"didactic init\"" >&2
-    exit 1
-fi
+INIT_RC=`didactic-init` || exit 1
+. ${INIT_RC}
 
-#branch=`git branch | sed -n 's/^\* \(.*\)$/\1/p'` || exit 1
-branch=master
+branch=`git branch | sed -n 's/^\* \(.*\)$/\1/p'` || exit 1
 if [ ":${branch}" != ":master" ] ; then
     echo "${PROG}: Nothing to be done on branch ${branch}" >&2
     exit 0
 fi
 
+GH_REPO_CACHE="${STATEDIR}/gh-repo"
+mkdir -p ${GH_REPO_CACHE} || exit 1
+BRANCHES_JSON="${GH_REPO_CACHE}/branches.json"
+BRANCHES_DIR="${GH_REPO_CACHE}/branches.d"
+PROJECTS_CF="${GH_REPO_CACHE}/projects.d"
+
+. gh-repo.rc
+
+vecho "Running \"github-get /repos/${DIDACTIC_GH_REPO}/branches\"..."
+github-get /repos/${DIDACTIC_GH_REPO}/branches >${BRANCHES_JSON} || exit 1
+
+REFS_URL=/repos/${DIDACTIC_GH_REPO}/git/refs
+
 PROJECTS=`jq -r 'keys[]' ${DIDACTIC_CF} | grep -v default`
+added_branches=n
+GH_REPO_BRANCHES=
+#
+# Identify which projects are under didactic-mgr control; build a list of all
+# active branches, collect the authorized users and teams for each branch, and
+# make sure all active branches exist.
+#
 for project in ${PROJECTS} ; do
+    vecho "Checking project ${project}..."
+
+    # Build a project-specific config file in ${project_cf}
+    project_cf="${PROJECTS_CF}/${project}.json"
+    d=`dirname ${project_cf}`
+    mkdir -p ${d} || exit 1
+    jq ".default + .\"${project}\"" <${DIDACTIC_CF} >${project_cf}
+    check_auth_cmd=`jq -r '.check_auth_cmd' ${project_cf}`
+
+    # For projects that use didactic-mgr...
+    if expr "${check_auth_cmd}" : 'gh-repo-log.*' >/dev/null ; then
+        vecho "Project ${project} uses gh-repo"
+        prerelease_envs=`jq -r .prerelease_environments[] ${project_cf}`
+        production_env=`jq -r .production_environment ${project_cf}`
+        vecho ${project} environments: ${prerelease_envs} ${production_env}
+        for env in ${prerelease_envs} ${production_env} ; do
+            branch="${project}/${env}"
+            GH_REPO_BRANCHES="${GH_REPO_BRANCHES} ${branch}"
+  
+            d=`dirname ${BRANCHES_DIR}/${branch}`
+            mkdir -p ${d} || exit 1
+
+            # Get authorized users for branch
+            auth_users="${BRANCHES_DIR}/${branch}-users"
+            jq -r ".authorized_users.${env}[]" <${project_cf} >${auth_users}
+            jq -r ".admin_user" <${project_cf} >>${auth_users}
+            sort -u <${auth_users} >${auth_users}.tmp
+            mv ${auth_users}.tmp ${auth_users}
+
+            # Get authorized teams for branch
+            auth_teams="${BRANCHES_DIR}/${branch}-teams"
+            jq -r ".authorized_teams.${env}[]" <${project_cf} | sort -u >${auth_teams}
+
+            # Make sure branch exists
+            json="${BRANCHES_DIR}/${branch}.json"
+            jq ".[]|select(.name==\"${branch}\")" ${BRANCHES_JSON} >${json}
+            if [ -s "${json}" ] ; then
+                vecho "Branch ${branch} already exists"
+            else
+                vecho "Running \"github-post ${REFS_URL}\"..."
+                cat <<EOF | github-post ${REFS_URL} >${json} || exit 1
+{
+  "ref": "refs/heads/${branch}",
+  "sha": "${DIDACTIC_GH_BRANCH_BASE_SHA1}"
+}
+EOF
+                added_branches=y
+            fi
+        done
+    fi
 
 done
+if [ "${added_branches}" = "y" ] ; then
+    vecho "Running \"github-get /repos/${DIDACTIC_GH_REPO}/branches\"..."
+    github-get /repos/${DIDACTIC_GH_REPO}/branches >${BRANCHES_JSON} || exit 1
+fi
+#
+# For each active branch, make sure branch protections are configured
+#
+for branch in ${GH_REPO_BRANCHES} ; do
+    json="${BRANCHES_DIR}/${branch}-branch.json"
+    protection="${BRANCHES_DIR}/${branch}-protection.json"
+    auth_users="${BRANCHES_DIR}/${branch}-users"
+    user_list=`jq --raw-input --slurp 'split("\n") | map(select(. != ""))' ${auth_users}`
+    auth_users_actual="${BRANCHES_DIR}/${branch}-users-actual"
+    auth_teams="${BRANCHES_DIR}/${branch}-teams"
+    team_list=`jq --raw-input --slurp 'split("\n") | map(select(. != ""))' ${auth_teams}`
+    auth_teams_actual="${BRANCHES_DIR}/${branch}-teams-actual"
+
+    vecho "Running \"github-get /repos/${DIDACTIC_GH_REPO}/branches/${branch}\"..."
+    github-get /repos/${DIDACTIC_GH_REPO}/branches/${branch} >${json}
+    is_protected=`jq -r .protected ${json}`
+    if [ ":${is_protected}" = ":true" ] ; then
+        vecho "Running \"github-get /repos/${DIDACTIC_GH_REPO}/branches/${branch}/protection\"..."
+        github-get /repos/${DIDACTIC_GH_REPO}/branches/${branch}/protection >${protection}
+        r=`jq -r '.restrictions' ${protection}`
+        if [ ":${r}" != ":" ] && [ "${r}" != "null" ] ; then
+            echo "$r" | jq -r '.users[].login' | sort -u >${auth_users_actual}
+            echo "$r" | jq -r '.teams[].name' | sort -u >${auth_teams_actual}
+            if cmp -s ${auth_users} ${auth_users_actual} &&
+               cmp -s ${auth_teams} ${auth_teams_actual} ; then
+                vecho "No changes needed for ${branch}"
+                continue
+            fi
+        fi
+    fi
+    update="${BRANCHES_DIR}/${branch}-update.json"
+    cat <<EOF >${update}
+{
+  "required_status_checks": null,
+  "enforce_admins": null,
+  "required_pull_request_reviews": null,
+  "restrictions": {
+    "users": ${user_list},
+    "teams": ${team_list}
+  }
+}
+EOF
+    vecho "Updating ${branch} protection: `cat ${update}`"
+    POST_URL="/repos/${DIDACTIC_GH_REPO}/branches/${branch}/protection"
+    vecho "Running \"github-post --put "${POST_URL}"\"..."
+    github-post --put "${POST_URL}" <${update} || exit 1
+done
+
+
 
 

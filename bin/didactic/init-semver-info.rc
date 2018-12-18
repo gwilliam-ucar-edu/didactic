@@ -1,0 +1,46 @@
+:
+#
+# Load the didactic coniguration for the current project.
+# The following variables must be defined:
+#  CIRCLE_TAG (or RELEASE_TAG)
+#  PRERELEASE_ENVIRONMENTS
+#  PRODUCTION_ENVIRONMENT
+#
+RELEASE_TAG=`parse-semver -i "${RELEASE_TAG:-${CIRCLE_TAG}}"`
+if [ ":${RELEASE_TAG}" = ":" ] ; then
+   echo "${PROG}: \$RELEASE_TAG/\$CIRCLE_TAG not a valid semver string" >&2
+   exit 1
+fi
+SOURCE_VERSION=`parse-semver -n "${RELEASE_TAG}"`
+prerelease=`parse-semver -p "${RELEASE_TAG}"`
+if [ ":${prerelease}" != ":" ] ; then
+    deploy_env=`expr "${prerelease}" : '-\(.*\)$'`
+    envs=" ${PRERELEASE_ENVIRONMENTS} ${PRODUCTION_ENVIRONMENT} "
+    if expr "$envs" : ".* ${deploy_env} .*" >/dev/null ; then
+        DEPLOY_ENV="${deploy_env}"
+    else
+        echo "Warning: \"${deploy_env}\" is not a valid deployment environment" >&2
+        DEPLOY_ENV=
+    fi
+    DEPLOY_TAGS="${DEPLOY_ENV}"
+else
+    DEPLOY_ENV="${PRODUCTION_ENVIRONMENT}"
+    DEPLOY_TAGS="${DEPLOY_ENV} `parse-semver -v ${SOURCE_VERSION}` latest"
+fi
+
+TRIGGER_TYPE="manual"
+meta=`parse-semver -m "${RELEASE_TAG}"`
+if [ ":${meta}" != ":" ] ; then
+    IMAGE_QUALIFIER=`echo "${meta}" | sed -e 's/^\+/-/'`
+    if expr ":${IMAGE_QUALIFIER}" : ":-auto.*" >/dev/null ; then
+        TRIGGER_TYPE="automatic"
+    fi
+else
+    IMAGE_QUALIFIER=
+fi
+
+vars="RELEASE_TAG SOURCE_VERSION DEPLOY_ENV DEPLOY_TAGS TRIGGER_TYPE \
+IMAGE_QUALIFIER"
+
+export ${vars}
+circle-env --add ${vars}

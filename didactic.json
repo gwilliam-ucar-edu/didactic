@@ -1,19 +1,28 @@
 {
   "default": {
-    "find_image_cmd": "gh-release find",
-    "register_image_cmd": "gh-release register",
-    "check_auth_cmd": "gh-repo-log --read --type=approved | tail -1",
-    "submit_auth_request_cmd": "gh-repo-auth-request",
-    "log_deployment_cmd": "gh-repo-log --write --type=deployed",
+    "admin_user": "sweg-didactic",
 
     "prerelease_environments": [
       "eval",
       "staging"
     ],
     "production_environment": "production",
+    "autodeploy": [
+      "eval"
+    ],
     "autodeploy_autobuilt": [
       "eval"
-    ]
+    ],
+    "authorized_users": {
+      "eval": [],
+      "staging": [],
+      "production": []
+    },
+    "authorized_teams": {
+      "eval": [],
+      "staging": [],
+      "production": []
+    }
   },
 
   "gwilliam-ucar-edu/test": {
@@ -21,8 +30,18 @@
       "eval",
       "staging"
     ],
-    "authorized_users": [
-      "gwilliam-ucar-edu"
-    ]
+    "authorized_users": {
+      "eval": [
+        "gwilliam-ucar-edu",
+        "wilhelmi",
+        "jasoncunning"
+      ],
+      "staging": [
+        "gwilliam-ucar-edu"
+      ],
+      "production": [
+        "gwilliam-ucar-edu"
+      ]
+    }
   }
 }  

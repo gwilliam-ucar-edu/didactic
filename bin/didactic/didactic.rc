@@ -69,16 +69,17 @@ fi
 if [ -f "${SCRIPTDIR}/didactic.rc" ] ; then
     DIDACTIC_LIB="${SCRIPTDIR}"
     SCRIPTDIR=`dirname ${SCRIPTDIR}`
-elif [ -f "${SCRIPTDIR}/lib/didactic.rc" ] ; then
-    DIDACTIC_LIB="${SCRIPTDIR}/lib"
+elif [ -f "${SCRIPTDIR}/didactic/didactic.rc" ] ; then
+    DIDACTIC_LIB="${SCRIPTDIR}/didactic"
 else
     echo "${PROG}: improper installation: cannot locate didactic.rc" >&2
     exit 1
 fi
-PATH="${SCRIPTDIR}:${DIDACTIC_LIB}:/usr/local/bin:/usr/local/sbin:/bin:/sbin:/usr/bin:/usr/sbin"
-export SCRIPTDIR DIDACTIC_LIB PATH
-if [ ":${CIRCLE_PROJECT_REPONAME}" = ":" ] ; then
-    echo "${PROG}: This must be run in a CircleCI job" >&2
-    exit 1
+
+PATH="${SCRIPTDIR}:${DIDACTIC_LIB}:${PATH}"
+if [ ":${LOCAL_BIN}" != ":" ] && [ "${LOCAL_BIN}" != "${SCRIPTDIR}" ] ; then
+    PATH="${LOCAL_BIN}:${PATH}"
 fi
+export SCRIPTDIR DIDACTIC_LIB PATH
+
 

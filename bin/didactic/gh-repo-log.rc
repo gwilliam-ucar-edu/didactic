@@ -1,8 +1,7 @@
 :
-DIDACTIC_GH_REPO=gwilliam-ucar-edu/didactic-mgr.git
-DIDACTIC_GH_URL=https://github.com/${DIDACTIC_GH_REPO}.git
+. gh-repo.rc
 
-if [ "${REPO}" = "${DIDACTIC_GH_REPO}" ] ; then
+if [ "${GH_REPO}" = "${DIDACTIC_GH_REPO}" ] ; then
     DIDACTIC_LOG_DIR=`git rev-parse --show-toplevel` || exit 1
 else
     DIDACTIC_LOG_DIR="${STATEDIR}/didactic-gh-repo"
