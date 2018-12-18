@@ -17,8 +17,10 @@ DIDACTIC_CF
 SCRIPTDIR=`cd \`dirname $0\`; pwd`
 . ${SCRIPTDIR}/didactic/didactic.rc
 
-INIT_RC=`didactic-init` || exit 1
-. ${INIT_RC}
+if [ ":${DIDACTIC_INIT}" != ":true" ] ; then
+    INIT_RC=`didactic-init` || exit 1
+    . ${INIT_RC}
+fi
 
 branch=`git branch | sed -n 's/^\* \(.*\)$/\1/p'` || exit 1
 if [ ":${branch}" != ":master" ] ; then
