@@ -53,7 +53,7 @@ jobs:
               git config --global user.email "sweg-ci@ucar.edu"
               git config --global user.name "NCAR SWEG CI"
               git clone https://${GH_TOKEN}@github.com/${GH_REPO}.wiki.git /tmp/wiki
-              bin/citools-docgen --bindir=bin /tmp/wiki
+              citools-docgen --bindir=bin /tmp/wiki
               cd /tmp/wiki
               git add .
               git commit -m 'Latest doc build'
