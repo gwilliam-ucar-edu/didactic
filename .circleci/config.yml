@@ -22,6 +22,8 @@ jobs:
           command: |
               mkdir -p ${STATEDIR} ${LOCAL_BIN}
               bin/didactic-init
+              . ${INIT_RC}
+              bin/circle-debug-dump
 
       - persist_to_workspace:
           root: /tmp/workspace
@@ -39,7 +41,7 @@ jobs:
           name: "Read configuration, update didactic-mgr"
           command: |
               . ${INIT_RC}
-              didactic-update
+              bin/didactic-update
 
       - run:
           name: "Generate documentation"
@@ -49,7 +51,7 @@ jobs:
               git config --global user.email "sweg-ci@ucar.edu"
               git config --global user.name "NCAR SWEG CI"
               git clone https://${GH_TOKEN}@github.com/${REPO}.wiki.git /tmp/wiki
-              ./citools-docgen --bindir=bin /tmp/wiki
+              bin/citools-docgen --bindir=bin /tmp/wiki
               cd /tmp/wiki
               git add .
               git commit -m 'Latest doc build'
