@@ -22,10 +22,7 @@ jobs:
           command: |
               mkdir -p ${STATEDIR} ${LOCAL_BIN}
               bin/didactic-init
-              tar cf - bin | (cd ${WORKSPACE} ; tar xvf -)
-              set -v
               . ${INIT_RC}
-              set +v
               ${LOCAL_BIN}/circle-debug-dump
 
       - persist_to_workspace:
@@ -37,6 +34,8 @@ jobs:
   update:
     executor: generic-executor
     steps:
+      - checkout
+
       - attach_workspace:
           at: /tmp/workspace
 
@@ -53,7 +52,7 @@ jobs:
               set +e
               git config --global user.email "sweg-ci@ucar.edu"
               git config --global user.name "NCAR SWEG CI"
-              git clone https://${GH_TOKEN}@github.com/${REPO}.wiki.git /tmp/wiki
+              git clone https://${GH_TOKEN}@github.com/${GH_REPO}.wiki.git /tmp/wiki
               bin/citools-docgen --bindir=bin /tmp/wiki
               cd /tmp/wiki
               git add .
