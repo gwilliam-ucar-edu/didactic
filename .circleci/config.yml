@@ -21,6 +21,7 @@ jobs:
           name: "Initialize workspace"
           command: |
               mkdir -p ${STATEDIR} ${LOCAL_BIN}
+              tar cf - bin | (cd ${WORKSPACE} ; tar xvf -)
               bin/didactic-init
               set -v
               . ${INIT_RC}
@@ -43,7 +44,7 @@ jobs:
           name: "Read configuration, update didactic-mgr"
           command: |
               . ${INIT_RC}
-              bin/didactic-update
+              didactic-update
 
       - run:
           name: "Generate documentation"
