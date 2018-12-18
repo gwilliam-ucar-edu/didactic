@@ -4,7 +4,7 @@ DESC="Initialize \"DIDACTIC\" script framework in a CircleCI workflow"
 USAGE1="${PROG}"
 
 DIDACTIC_REPO=gwilliam-ucar-edu/didactic
-DIDACTIC_GLOBAL_CF="DIDACTIC.json"
+DIDACTIC_GLOBAL_CF="didactic.json"
 CITOOLS_REPO_DEFAULT="https://github.com/NCAR/citools.git"
 CITOOLS_TAG_DEFAULT="master"
 CITOOLS_VERBOSE_DEFAULT=true
