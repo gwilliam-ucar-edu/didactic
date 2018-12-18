@@ -50,8 +50,8 @@ jobs:
           command: |
               . ${INIT_RC}
               set +e
-              git config --global user.email "sweg-ci@ucar.edu"
-              git config --global user.name "NCAR SWEG CI"
+              git config --global user.email "sweg-didactic@ucar.edu"
+              git config --global user.name "NCAR SWES/SWEG didactic admin"
               git clone https://${GH_TOKEN}@github.com/${GH_REPO}.wiki.git /tmp/wiki
               citools-docgen --bindir=bin /tmp/wiki
               cd /tmp/wiki
