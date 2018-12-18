@@ -53,6 +53,7 @@ jobs:
               git config --global user.email "sweg-didactic@ucar.edu"
               git config --global user.name "NCAR SWES/SWEG didactic admin"
               git clone https://${GH_TOKEN}@github.com/${GH_REPO}.wiki.git /tmp/wiki
+              REPO=${GH_REPO} export REPO
               citools-docgen --bindir=bin /tmp/wiki
               cd /tmp/wiki
               git add .
